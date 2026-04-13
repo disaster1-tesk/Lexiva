@@ -175,9 +175,16 @@ let radarChart: echarts.ECharts | null = null
 const loadData = async () => {
   try {
     const res = await statisticsApi.getTrend(parseInt(timeRange.value))
-    if (res.data) {
-      updateCharts(res.data)
+    // 后端返回 {code: 0, data: [{date, chat_count, words_reviewed, minutes}, ...]}
+    // 需要转换为前端期望的 {dates, words, conversations, writings} 格式
+    const apiData = res.data?.data || res.data || []
+    const convertedData = {
+      dates: apiData.map((item: any) => item.date?.substring(5) || ''),  // 格式: MM-DD
+      words: apiData.map((item: any) => item.words_reviewed || 0),
+      conversations: apiData.map((item: any) => item.chat_count || 0),
+      writings: apiData.map((item: any) => Math.floor((item.minutes || 0) / 5))  // 估算写作数
     }
+    updateCharts(convertedData)
   } catch (e) {
     // 使用默认数据
     updateCharts(getDefaultData())

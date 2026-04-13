@@ -271,7 +271,7 @@ const submitWriting = async () => {
         grammar: data.score?.grammar || data.grammar || 0,
         vocabulary: data.score?.vocabulary || data.vocabulary || 0,
         coherence: data.score?.fluency || data.coherence || 0,
-        expression: data.score?.vocabulary || data.expression || 0,
+        expression: data.score?.fluency || data.expression || 0,  // 使用 fluency 映射
         errors: data.corrections?.map((c: any) => ({
           type: c.type || '语法',
           original: c.wrong || c.original || '',
@@ -354,9 +354,13 @@ ${correctionResult.value.suggestions ? correctionResult.value.suggestions.join('
 const showHistory = async () => {
   try {
     const res = await writingApi.getHistory()
-    if (res.data && res.data.history) {
-      historyList.value = res.data.history
-    }
+    // 后端返回格式: { code: 0, data: { items: [...], total, page, limit } }
+    const items = res.data?.data?.items || res.data?.items || []
+    // 映射 created_at 为 date
+    historyList.value = items.map((item: any) => ({
+      ...item,
+      date: item.created_at || item.date
+    }))
   } catch (e) {
     // 使用本地历史
   }

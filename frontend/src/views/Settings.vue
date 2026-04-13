@@ -1,9 +1,52 @@
 <template>
   <div class="settings-page">
+    <!-- 当前配置概览 -->
+    <el-card class="config-overview" v-if="currentConfig">
+      <template #header>
+        <div class="card-header">
+          <span class="title">
+            <el-icon><Monitor /></el-icon>
+            当前配置
+          </span>
+          <el-tag :type="connectionStatus === 'connected' ? 'success' : 'info'">
+            {{ connectionStatus === 'connected' ? '已连接' : '未测试' }}
+          </el-tag>
+        </div>
+      </template>
+      <div class="config-info">
+        <div class="config-item">
+          <span class="config-label">服务厂商</span>
+          <span class="config-value">{{ getProviderName(currentConfig.provider) }}</span>
+        </div>
+        <div class="config-item">
+          <span class="config-label">模型</span>
+          <span class="config-value">{{ currentConfig.model }}</span>
+        </div>
+        <div class="config-item">
+          <span class="config-label">Temperature</span>
+          <span class="config-value">{{ currentConfig.temperature }}</span>
+        </div>
+        <div class="config-item">
+          <span class="config-label">Max Tokens</span>
+          <span class="config-value">{{ currentConfig.max_tokens }}</span>
+        </div>
+      </div>
+      <!-- 可用厂商列表 -->
+      <div class="available-providers">
+        <span class="label">可用厂商：</span>
+        <el-tag v-for="p in providers" :key="p.id" :type="p.id === currentConfig.provider ? 'primary' : 'info'" size="small" class="provider-tag">
+          {{ p.name }}
+        </el-tag>
+      </div>
+    </el-card>
+
     <el-card class="settings-card">
       <template #header>
         <div class="card-header">
-          <span class="title">AI 模型配置</span>
+          <span class="title">
+            <el-icon><ChatLineRound /></el-icon>
+            AI 模型配置
+          </span>
         </div>
       </template>
       
@@ -88,21 +131,156 @@
         </el-form-item>
       </el-form>
     </el-card>
+
+    <!-- TTS 配置 -->
+    <el-card class="settings-card">
+      <template #header>
+        <div class="card-header">
+          <span class="title">
+            <el-icon><Microphone /></el-icon>
+            语音合成 (TTS) 配置
+          </span>
+        </div>
+      </template>
+      
+      <el-form label-width="120px">
+        <el-form-item label="服务提供商">
+          <el-select v-model="form.tts_provider" placeholder="选择 TTS 服务" @change="onTTSProviderChange">
+            <el-option v-for="p in ttsProviders" :key="p.id" :label="p.name" :value="p.id">
+              <span>{{ p.name }}</span>
+              <span style="float: right; color: #8492a6; font-size: 12px">{{ p.description }}</span>
+            </el-option>
+          </el-select>
+        </el-form-item>
+        
+        <!-- 腾讯云 TTS 密钥配置 -->
+        <template v-if="form.tts_provider === 'tencent'">
+          <el-form-item label="Secret ID">
+            <el-input 
+              v-model="form.tencent_secret_id" 
+              type="password" 
+              show-password
+              placeholder="腾讯云 SecretId"
+            ></el-input>
+          </el-form-item>
+          <el-form-item label="Secret Key">
+            <el-input 
+              v-model="form.tencent_secret_key" 
+              type="password" 
+              show-password
+              placeholder="腾讯云 SecretKey"
+            ></el-input>
+          </el-form-item>
+          <el-form-item label="App ID">
+            <el-input 
+              v-model="form.tencent_app_id" 
+              placeholder="腾讯云 AppId (可选)"
+            ></el-input>
+          </el-form-item>
+        </template>
+        
+        <el-form-item label="语音选择">
+          <el-select v-model="form.tts_model" placeholder="选择语音">
+            <el-option v-for="v in ttsVoices" :key="v.id" :label="v.name" :value="v.id">
+              <span>{{ v.name }}</span>
+              <span style="float: right; color: #8492a6; font-size: 12px">{{ v.gender }}</span>
+            </el-option>
+          </el-select>
+        </el-form-item>
+        
+        <el-form-item>
+          <el-button type="primary" @click="saveSettings" :loading="saving">保存配置</el-button>
+        </el-form-item>
+      </el-form>
+    </el-card>
+
+    <!-- 发音评测配置 -->
+    <el-card class="settings-card">
+      <template #header>
+        <div class="card-header">
+          <span class="title">
+            <el-icon><Setting /></el-icon>
+            发音评测 (Whisper) 配置
+          </span>
+        </div>
+      </template>
+      
+      <el-form label-width="120px">
+        <el-form-item label="服务提供商">
+          <el-select v-model="form.whisper_provider" placeholder="选择语音识别服务" @change="onWhisperProviderChange">
+            <el-option v-for="p in whisperProviders" :key="p.id" :label="p.name" :value="p.id">
+              <span>{{ p.name }}</span>
+              <span style="float: right; color: #8492a6; font-size: 12px">{{ p.description }}</span>
+            </el-option>
+          </el-select>
+        </el-form-item>
+        
+        <el-form-item label="模型选择">
+          <el-select v-model="form.whisper_model" placeholder="选择模型">
+            <el-option v-for="m in whisperModels" :key="m.id" :label="m.name" :value="m.id">
+              <span>{{ m.name }}</span>
+              <span v-if="m.size" style="float: right; color: #8492a6; font-size: 12px">{{ m.size }}</span>
+            </el-option>
+          </el-select>
+        </el-form-item>
+        
+        <el-form-item>
+          <el-button type="primary" @click="saveSettings" :loading="saving">保存配置</el-button>
+        </el-form-item>
+      </el-form>
+    </el-card>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getAISettings, updateAISettings, getProviders, getModels } from '@/api/settings'
+import {
+  getAISettings,
+  updateAISettings,
+  getProviders,
+  getModels,
+  getTTSProviders,
+  getTTSVoices,
+  getWhisperProviders,
+  getWhisperModels
+} from '@/api/settings'
+import { Monitor, Setting, Microphone, ChatLineRound } from '@element-plus/icons-vue'
 import type { FormInstance, FormRules } from 'element-plus'
 
 const formRef = ref<FormInstance>()
 const saving = ref(false)
 const testing = ref(false)
+const connectionStatus = ref<'connected' | 'disconnected' | 'untested'>('untested')
+const currentConfig = ref<{
+  provider: string
+  model: string
+  temperature: number
+  max_tokens: number
+  top_p: number
+  base_url: string
+} | null>(null)
 
 const providers = ref<{ id: string; name: string; description: string }[]>([])
 const availableModels = ref<string[]>([])
+
+// TTS 相关
+const ttsProviders = ref<{ id: string; name: string; description: string }[]>([])
+const ttsVoices = ref<{ id: string; name: string; gender: string }[]>([])
+
+// Whisper 相关
+const whisperProviders = ref<{ id: string; name: string; description: string }[]>([])
+const whisperModels = ref<{ id: string; name: string; size?: string }[]>([])
+
+// 厂商名称映射
+function getProviderName(providerId: string): string {
+  const map: Record<string, string> = {
+    deepseek: 'DeepSeek',
+    openai: 'OpenAI',
+    ollama: 'Ollama (本地)'
+  }
+  return map[providerId] || providerId
+}
 
 const form = reactive({
   provider: 'deepseek',
@@ -111,7 +289,17 @@ const form = reactive({
   temperature: 0.7,
   max_tokens: 1000,
   top_p: 1.0,
-  base_url: ''
+  base_url: '',
+  // TTS 配置
+  tts_provider: 'edge',
+  tts_model: 'en-US-AriaNeural',
+  // 腾讯云 TTS 配置
+  tencent_secret_id: '',
+  tencent_secret_key: '',
+  tencent_app_id: '',
+  // Whisper 配置
+  whisper_provider: 'faster-whisper',
+  whisper_model: 'base'
 })
 
 const rules: FormRules = {
@@ -139,6 +327,46 @@ async function loadModels(provider: string) {
   }
 }
 
+// 加载 TTS 配置
+async function loadTTSConfig() {
+  try {
+    const res = await getTTSProviders()
+    ttsProviders.value = res.providers
+    await onTTSProviderChange(form.tts_provider)
+  } catch (e) {
+    console.error('Failed to load TTS providers:', e)
+  }
+}
+
+async function onTTSProviderChange(provider: string) {
+  try {
+    const res = await getTTSVoices(provider)
+    ttsVoices.value = res.voices
+  } catch (e) {
+    console.error('Failed to load TTS voices:', e)
+  }
+}
+
+// 加载 Whisper 配置
+async function loadWhisperConfig() {
+  try {
+    const res = await getWhisperProviders()
+    whisperProviders.value = res.providers
+    await onWhisperProviderChange(form.whisper_provider)
+  } catch (e) {
+    console.error('Failed to load Whisper providers:', e)
+  }
+}
+
+async function onWhisperProviderChange(provider: string) {
+  try {
+    const res = await getWhisperModels(provider)
+    whisperModels.value = res.models as { id: string; name: string; size?: string }[]
+  } catch (e) {
+    console.error('Failed to load Whisper models:', e)
+  }
+}
+
 // Load settings
 async function loadSettings() {
   try {
@@ -149,6 +377,29 @@ async function loadSettings() {
     form.max_tokens = res.max_tokens
     form.top_p = res.top_p
     form.base_url = res.base_url
+    
+    // TTS 配置
+    form.tts_provider = res.tts_provider || 'edge'
+    form.tts_model = res.tts_model || 'en-US-AriaNeural'
+    // 腾讯云 TTS 配置
+    form.tencent_secret_id = res.tencent_secret_id || ''
+    form.tencent_secret_key = res.tencent_secret_key || ''
+    form.tencent_app_id = res.tencent_app_id || ''
+    
+    // Whisper 配置
+    form.whisper_provider = res.whisper_provider || 'faster-whisper'
+    form.whisper_model = res.whisper_model || 'base'
+    
+    // 保存当前配置用于展示
+    currentConfig.value = {
+      provider: res.provider,
+      model: res.model,
+      temperature: res.temperature,
+      max_tokens: res.max_tokens,
+      top_p: res.top_p,
+      base_url: res.base_url
+    }
+    
     await loadModels(res.provider)
   } catch (e) {
     console.error('Failed to load settings:', e)
@@ -174,7 +425,6 @@ async function saveSettings() {
   
   saving.value = true
   try {
-    await formRef.value.validate()
     await updateAISettings({
       provider: form.provider,
       api_key: form.api_key,
@@ -182,7 +432,15 @@ async function saveSettings() {
       temperature: form.temperature,
       max_tokens: form.max_tokens,
       top_p: form.top_p,
-      base_url: form.base_url
+      base_url: form.base_url,
+      tts_provider: form.tts_provider,
+      tts_model: form.tts_model,
+      // 腾讯云 TTS 配置
+      tencent_secret_id: form.tencent_secret_id,
+      tencent_secret_key: form.tencent_secret_key,
+      tencent_app_id: form.tencent_app_id,
+      whisper_provider: form.whisper_provider,
+      whisper_model: form.whisper_model
     })
     ElMessage.success('配置保存成功')
   } catch (e: any) {
@@ -224,19 +482,64 @@ async function testConnection() {
 
 onMounted(async () => {
   await loadProviders()
+  await loadTTSConfig()
+  await loadWhisperConfig()
   await loadSettings()
 })
 </script>
 
 <style scoped>
 .settings-page {
-  padding: 20px;
-  max-width: 600px;
+  padding: 24px;
+  max-width: 900px;
   margin: 0 auto;
 }
 
-.settings-card {
+.config-overview {
   margin-bottom: 20px;
+}
+
+.config-info {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+
+.config-item {
+  display: flex;
+  flex-direction: column;
+}
+
+.config-label {
+  font-size: 12px;
+  color: #8492a6;
+  margin-bottom: 4px;
+}
+
+.config-value {
+  font-size: 14px;
+  font-weight: 500;
+  color: #303133;
+}
+
+.available-providers {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px dashed #ebeef5;
+}
+
+.available-providers .label {
+  font-size: 12px;
+  color: #8492a6;
+  margin-right: 8px;
+}
+
+.provider-tag {
+  margin-right: 8px;
+}
+
+.settings-card {
+  margin-bottom: 32px;
 }
 
 .card-header {
@@ -248,6 +551,9 @@ onMounted(async () => {
 .title {
   font-size: 18px;
   font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .form-tip {

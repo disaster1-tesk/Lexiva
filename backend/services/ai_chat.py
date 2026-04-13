@@ -4,9 +4,13 @@ Supports multiple AI providers: DeepSeek, OpenAI, Ollama
 """
 import os
 import httpx
+import logging
+import time
 from typing import Optional
 from db.connection import get_db
 from models import AISettings
+
+logger = logging.getLogger(__name__)
 
 
 class AIChatService:
@@ -95,6 +99,8 @@ class AIChatService:
         Returns:
             dict with 'reply' and optional 'corrections'
         """
+        logger.info(f"Chat request: scene={scene}, message_len={len(message)}")
+        
         settings = self._get_settings()
         provider = settings.provider
         model = settings.model
@@ -106,6 +112,7 @@ class AIChatService:
         base_url = self._get_base_url(settings)
         
         if not api_key:
+            logger.warning("API Key not configured")
             return {
                 "reply": "API Key 未配置，请在设置页面配置 AI 模型。",
                 "corrections": []
@@ -120,6 +127,17 @@ class AIChatService:
         ]
         
         try:
+            request_params = {
+                "model": model,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "top_p": top_p,
+                "messages_count": len(messages)
+            }
+            logger.info(f"Calling AI API: provider={provider}, model={model}, params={request_params}")
+            
+            start_time = time.time()
+            
             async with httpx.AsyncClient(timeout=60.0) as client:
                 response = await client.post(
                     base_url,
@@ -140,6 +158,9 @@ class AIChatService:
                 
                 reply = result["choices"][0]["message"]["content"]
                 
+                elapsed_ms = (time.time() - start_time) * 1000
+                logger.info(f"AI response received: provider={provider}, status={response.status_code}, elapsed_ms={elapsed_ms:.0f}, reply_len={len(reply)}")
+                
                 # Parse corrections if any
                 corrections = self._parse_corrections(message, reply)
                 
@@ -154,11 +175,13 @@ class AIChatService:
                     "corrections": corrections
                 }
         except httpx.HTTPStatusError as e:
+            logger.error(f"AI API HTTP error: {e.response.status_code}", exc_info=True)
             return {
                 "reply": f"API 请求失败 ({e.response.status_code})，请检查 API Key 和网络配置。",
                 "corrections": []
             }
         except Exception as e:
+            logger.error(f"AI API error: {e}", exc_info=True)
             return {
                 "reply": f"发生了错误: {str(e)}，请重试。",
                 "corrections": []

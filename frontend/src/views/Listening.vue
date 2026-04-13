@@ -69,15 +69,24 @@
           </div>
           
           <div class="btn-group">
-            <el-button type="primary" @click="playAudio" :loading="isPlaying">
-              <el-icon><VideoPlay /></el-icon>
-              播放
-            </el-button>
-            <el-button @click="stopAudio" :disabled="!isPlaying">
-              <el-icon><VideoPause /></el-icon>
-              停止
-            </el-button>
-          </div>
+          <!-- 进度条 -->
+          <el-progress
+            v-if="isPlaying"
+            :percentage="progress"
+            :stroke-width="4"
+            :show-text="false"
+            status="exception"
+            class="tts-progress"
+          />
+          <el-button type="primary" @click="playAudio" :loading="isPlaying">
+            <el-icon><VideoPlay /></el-icon>
+            播放
+          </el-button>
+          <el-button @click="stopAudio" :disabled="!isPlaying">
+            <el-icon><VideoPause /></el-icon>
+            停止
+          </el-button>
+        </div>
         </div>
 
         <!-- 音频播放器 -->
@@ -155,11 +164,12 @@
             >
               <template #sub-title>
                 <div class="result-detail">
-                  <p>原文: {{ dictationResult.original }}</p>
-                  <p>你的答案: {{ dictationResult.userAnswer }}</p>
-                  <p v-if="dictationResult.differences.length">
-                    差异: {{ dictationResult.differences.join(', ') }}
+                  <p>原文: {{ dictationResult.reference || dictationResult.original }}</p>
+                  <p>你的答案: {{ dictationResult.user_input || dictationResult.userAnswer }}</p>
+                  <p v-if="dictationResult.errors && dictationResult.errors.length">
+                    错误: {{ dictationResult.errors.map((e: any) => e.expected).join(', ') }}
                   </p>
+                  <p>准确率: {{ dictationResult.accuracy || dictationResult.accuracyRate }}%</p>
                 </div>
               </template>
               <template #extra>
@@ -178,13 +188,13 @@
           <div class="material-card" @click="selectMaterial(material)">
             <div class="material-header">
               <el-tag :type="getDifficultyType(material.difficulty)">
-                {{ material.difficulty }}
+                {{ material.difficulty_label || material.difficulty }}
               </el-tag>
             </div>
             <h4>{{ material.title }}</h4>
-            <p class="material-preview">{{ material.preview }}</p>
+            <p class="material-preview">{{ material.text }}</p>
             <div class="material-footer">
-              <span><el-icon><Clock /></el-icon> {{ material.duration }}</span>
+              <span><el-icon><Clock /></el-icon> 听力练习</span>
               <el-button type="primary" size="small" @click.stop="playMaterial(material)">
                 <el-icon><VideoPlay /></el-icon> 播放
               </el-button>
@@ -216,6 +226,25 @@ const isPlaying = ref(false)
 const audioUrl = ref('')
 const audioPlayer = ref<HTMLAudioElement | null>(null)
 
+// 模拟进度条
+const progress = ref(0)
+let progressTimer: ReturnType<typeof setInterval> | null = null
+
+const startProgress = () => {
+  progress.value = 0
+  progressTimer = setInterval(() => {
+    progress.value = (progress.value + 10) % 100
+  }, 300)
+}
+
+const stopProgress = () => {
+  if (progressTimer) {
+    clearInterval(progressTimer)
+    progressTimer = null
+  }
+  progress.value = 0
+}
+
 // // 常用句子
 const quickSentences = [
   'The quick brown fox jumps over the lazy dog.',
@@ -234,11 +263,14 @@ const playAudio = async () => {
   }
 
   isPlaying.value = true
+  startProgress()
   try {
     const res = await listeningApi.tts(freeText.value, speed.value, selectedVoice.value)
-    if (res.data && res.data.audio) {
+    // 后端返回: { code: 0, data: { success, audio, ... } }
+    const audioData = res.data?.data
+    if (audioData && audioData.success && audioData.audio) {
       // 解码 base64 音频数据
-      const byteCharacters = atob(res.data.audio)
+      const byteCharacters = atob(audioData.audio)
       const byteNumbers = new Array(byteCharacters.length)
       for (let i = 0; i < byteCharacters.length; i++) {
         byteNumbers[i] = byteCharacters.charCodeAt(i)
@@ -248,12 +280,15 @@ const playAudio = async () => {
       audioUrl.value = URL.createObjectURL(blob)
       ElMessage.success('音频生成成功')
     } else {
-      ElMessage.error('音频生成失败')
+      // 后端返回错误
+      const errorMsg = audioData?.error || res.data?.message || '音频生成失败'
+      ElMessage.error(errorMsg)
     }
   } catch (e: any) {
-    ElMessage.error('音频生成失败: ' + (e.message || ''))
+    ElMessage.error('音频生成失败: ' + (e.response?.data?.detail || e.message || '请检查网络连接'))
   } finally {
     isPlaying.value = false
+    stopProgress()
   }
 }
 
@@ -272,24 +307,43 @@ const showAnswer = ref(false)
 const hasSubmitted = ref(false)
 const dictationResult = ref<any>(null)
 
-// // 听写材料
-const dictationMaterials = [
-  { id: 1, difficulty: '初级', text: 'The sun is bright today.', audio: '' },
-  { id: 2, difficulty: '中级', text: 'I would like to travel around the world.', audio: '' },
-  { id: 3, difficulty: '高级', text: 'Although he was tired, he still finished the project on time.', audio: '' }
-]
+// // 听写材料 - 使用后端API数据
+const loadDictationMaterials = async () => {
+  try {
+    const res = await listeningApi.getMaterials()
+    if (res.data && res.data.data && res.data.data.length > 0) {
+      return res.data.data
+    }
+  } catch (e) {
+    console.error('Failed to load materials:', e)
+  }
+  // 备用本地数据
+  return [
+    { id: 1, difficulty: 'beginner', difficulty_label: '初级', text: 'Good morning! How are you today?', translation: '早上好！你今天好吗？' },
+    { id: 2, difficulty: 'intermediate', difficulty_label: '中级', text: 'I would like to travel around the world.', translation: '我想环游世界。' },
+    { id: 3, difficulty: 'advanced', difficulty_label: '高级', text: 'Although he was tired, he still finished the project on time.', translation: '虽然他累了，但仍按时完成了项目。' }
+  ]
+}
+
+// 初始化材料
+const dictationMaterials = ref<any[]>([])
+loadDictationMaterials().then(data => {
+  dictationMaterials.value = data
+})
 
 const playDictation = async () => {
   if (!currentDictation.value) {
-    currentDictation.value = dictationMaterials[0]
+    currentDictation.value = dictationMaterials.value[0]
   }
   
   isPlaying.value = true
   try {
     const res = await listeningApi.tts(currentDictation.value.text, 0.8, 'en-US-AriaNeural')
-    if (res.data && res.data.audio) {
+    // 后端返回格式: { code: 0, data: { success, audio, text } }
+    const audioData = res.data?.data || res.data
+    if (audioData && audioData.success && audioData.audio) {
       // 解码 base64 音频数据
-      const byteCharacters = atob(res.data.audio)
+      const byteCharacters = atob(audioData.audio)
       const byteNumbers = new Array(byteCharacters.length)
       for (let i = 0; i < byteCharacters.length; i++) {
         byteNumbers[i] = byteCharacters.charCodeAt(i)
@@ -303,11 +357,11 @@ const playDictation = async () => {
         isPlaying.value = false
       }
     } else {
-      ElMessage.error('播放失败')
+      ElMessage.error(audioData?.error || '音频生成失败，请稍后重试')
       isPlaying.value = false
     }
-  } catch (e) {
-    ElMessage.error('播放失败')
+  } catch (e: any) {
+    ElMessage.error('播放失败: ' + (e.message || '请检查网络连接'))
     isPlaying.value = false
   }
 }
@@ -317,34 +371,51 @@ const replayDictation = () => {
 }
 
 const submitAnswer = async () => {
-  if (!currentDictation.value) return
+  if (!currentDictation.value || !userAnswer.value.trim()) {
+    ElMessage.warning('请输入你的答案')
+    return
+  }
   
   hasSubmitted.value = true
   try {
     const res = await listeningApi.dictation(currentDictation.value.text, userAnswer.value)
-    if (res.data) {
+    // 后端返回格式: { code: 0, data: { score, accuracy, correct_words, total_words, errors, reference, user_input } }
+    if (res.data && res.data.data) {
+      dictationResult.value = res.data.data
+    } else if (res.data) {
       dictationResult.value = res.data
     }
-  } catch (e) {
+  } catch (e: any) {
     // 简单的本地比对
     const original = currentDictation.value.text.toLowerCase()
     const answer = userAnswer.value.toLowerCase()
     const words1 = original.split(' ')
     const words2 = answer.split(' ')
-    const diff: string[] = []
+    const errors: any[] = []
+    let correct_words = 0
     
     words1.forEach((w: string, i: number) => {
-      if (w !== words2[i]) {
-        diff.push(`${w} → ${words2[i] || '(缺失)'}`)
+      if (i < words2.length && w === words2[i]) {
+        correct_words++
+      } else {
+        errors.push({
+          position: i,
+          expected: w,
+          actual: words2[i] || '[missing]'
+        })
       }
     })
     
-    const score = Math.max(0, 100 - diff.length * 20)
+    const accuracy = Math.round(correct_words / words1.length * 100)
+    const score = Math.max(0, accuracy)
     dictationResult.value = {
       score,
-      original: currentDictation.value.text,
-      userAnswer: userAnswer.value,
-      differences: diff
+      accuracy,
+      correct_words,
+      total_words: words1.length,
+      errors,
+      reference: currentDictation.value.text,
+      user_input: userAnswer.value
     }
   }
 }
@@ -352,32 +423,42 @@ const submitAnswer = async () => {
 const nextDictation = () => {
   const idx = dictationMaterials.findIndex(m => m.id === currentDictation.value?.id)
   const nextIdx = (idx + 1) % dictationMaterials.length
-  currentDictation.value = dictationMaterials[nextIdx]
+  currentDictation.value = dictationMaterials.value[nextIdx]
   userAnswer.value = ''
   showAnswer.value = false
   hasSubmitted.value = false
   dictationResult.value = null
 }
 
-// // 材料库
-const materials = ref([
-  { id: 1, title: '日常问候', difficulty: '初级', preview: 'Hello, how are you today?', duration: '30秒' },
-  { id: 2, title: '餐厅点餐', difficulty: '中级', preview: 'I would like to order some coffee.', duration: '45秒' },
-  { id: 3, title: '商务会议', difficulty: '高级', preview: 'Let me summarize the key points.', duration: '60秒' }
-])
+// // 材料库 - 从后端加载
+const materials = ref<any[]>([])
+
+const loadMaterials = async () => {
+  try {
+    const res = await listeningApi.getMaterials()
+    if (res.data && res.data.data) {
+      materials.value = res.data.data
+    }
+  } catch (e) {
+    console.error('Failed to load materials:', e)
+  }
+}
+
+loadMaterials()
 
 const selectMaterial = (material: any) => {
   activeTab.value = 'dictation'
-  currentDictation.value = { ...material, text: material.preview }
+  currentDictation.value = { ...material }
 }
 
 const playMaterial = async (material: any) => {
   isPlaying.value = true
   try {
-    const res = await listeningApi.tts(material.preview, 1.0, 'en-US-AriaNeural')
-    if (res.data && res.data.audio) {
+    const res = await listeningApi.tts(material.text, 1.0, 'en-US-AriaNeural')
+    const audioData = res.data?.data || res.data
+    if (audioData && audioData.success && audioData.audio) {
       // 解码 base64 音频数据
-      const byteCharacters = atob(res.data.audio)
+      const byteCharacters = atob(audioData.audio)
       const byteNumbers = new Array(byteCharacters.length)
       for (let i = 0; i < byteCharacters.length; i++) {
         byteNumbers[i] = byteCharacters.charCodeAt(i)
@@ -391,17 +472,20 @@ const playMaterial = async (material: any) => {
         isPlaying.value = false
       }
     } else {
-      ElMessage.error('播放失败')
+      ElMessage.error(audioData?.error || '音频生成失败，请稍后重试')
       isPlaying.value = false
     }
-  } catch (e) {
-    ElMessage.error('播放失败')
+  } catch (e: any) {
+    ElMessage.error('播放失败: ' + (e.message || '请检查网络连接'))
     isPlaying.value = false
   }
 }
 
 const getDifficultyType = (difficulty: string) => {
   const map: Record<string, string> = {
+    'beginner': 'success',
+    'intermediate': 'warning', 
+    'advanced': 'danger',
     '初级': 'success',
     '中级': 'warning',
     '高级': 'danger'
@@ -482,7 +566,12 @@ const getDifficultyType = (difficulty: string) => {
 .btn-group {
   margin-top: 16px;
   display: flex;
+  flex-direction: column;
   gap: 12px;
+}
+
+.tts-progress {
+  width: 100%;
 }
 
 .audio-player {

@@ -32,6 +32,14 @@
           <el-icon><Notebook /></el-icon>
           <span>单词本</span>
         </el-menu-item>
+        <el-menu-item index="/dictation">
+          <el-icon><EditPen /></el-icon>
+          <span>单词默写</span>
+        </el-menu-item>
+        <el-menu-item index="/grammar">
+          <el-icon><Reading /></el-icon>
+          <span>语法学习</span>
+        </el-menu-item>
         <el-menu-item index="/writing">
           <el-icon><Edit /></el-icon>
           <span>写作批改</span>
@@ -103,7 +111,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   Reading, House, ChatDotRound, Microphone, Headset,
-  Notebook, Edit, Fold, Expand, Timer, DataAnalysis, Setting, ArrowDown
+  Notebook, Edit, Fold, Expand, Timer, DataAnalysis, Setting, ArrowDown, EditPen
 } from '@element-plus/icons-vue'
 import { getAISettings } from '@/api/settings'
 
@@ -147,6 +155,8 @@ const currentRoute = computed(() => {
     '/pronunciation': '发音评测',
     '/listening': '听力训练',
     '/vocabulary': '单词本',
+    '/dictation': '单词默写',
+    '/grammar': '语法学习',
     '/writing': '写作批改',
     '/stats': '学习中心',
     '/settings': '设置'

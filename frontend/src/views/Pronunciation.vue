@@ -113,8 +113,19 @@
           <div class="page-card result-card">
             <h3 class="result-title">评测结果</h3>
             
-            <div v-if="!evaluationResult" class="no-result">
+            <div v-if="!evaluationResult && !isEvaluating" class="no-result">
               <el-empty description="暂无评测结果，请先录音" />
+            </div>
+
+            <!-- 评测中进度条 -->
+            <div v-else-if="isEvaluating" class="evaluating-progress">
+              <el-progress
+                :percentage="50"
+                :indeterminate="true"
+                :duration="3"
+                status="exception"
+              />
+              <p class="progress-text">正在分析您的发音...</p>
             </div>
 
             <div v-else class="result-content">
@@ -229,6 +240,7 @@ const recordTime = ref(0)
 const audioBlob = ref<Blob | null>(null)
 const audioUrl = ref('')
 const mediaRecorder = ref<MediaRecorder | null>(null)
+const currentMimeType = ref('audio/webm')  // 当前录音格式
 const recordingTimer = ref<number | null>(null)
 
 // 评测状态
@@ -249,8 +261,9 @@ const loadSentences = async () => {
     }
     const backendDifficulty = difficultyMap[difficulty.value] || 'beginner'
     const res = await pronunciationApi.getSentences(backendDifficulty)
-    if (res.data && res.data.sentences) {
-      sentences.value = res.data.sentences
+    // 后端返回格式: { code: 0, data: [...] }
+    if (res.data && res.data.data) {
+      sentences.value = res.data.data
       if (sentences.value.length > 0) {
         currentSentence.value = sentences.value[0]
       }
@@ -316,8 +329,30 @@ const playReference = async () => {
 // 开始录音
 const startRecording = async () => {
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-    mediaRecorder.value = new MediaRecorder(stream)
+    // 请求麦克风权限
+    const stream = await navigator.mediaDevices.getUserMedia({ 
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      } 
+    })
+    // 优先使用 MP4 格式（兼容性更好），其次 WebM
+    let mimeType = 'audio/webm'
+    if (MediaRecorder.isTypeSupported('audio/mp4;codecs=mp4a.40.2')) {
+      mimeType = 'audio/mp4;codecs=mp4a.40.2'
+    } else if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+      mimeType = 'audio/webm;codecs=opus'
+    }
+    currentMimeType.value = mimeType  // 保存当前使用的格式
+    mediaRecorder.value = new MediaRecorder(stream, { mimeType })
+    
+    // 验证 MediaRecorder 初始化是否成功
+    if (!mediaRecorder.value || mediaRecorder.value.state === 'inactive') {
+      stream.getTracks().forEach(track => track.stop())
+      throw new Error('MediaRecorder 初始化失败')
+    }
+    
     const chunks: BlobPart[] = []
     
     mediaRecorder.value.ondataavailable = (e) => {
@@ -325,7 +360,8 @@ const startRecording = async () => {
     }
     
     mediaRecorder.value.onstop = () => {
-      audioBlob.value = new Blob(chunks, { type: 'audio/webm' })
+      const blobType = currentMimeType.value.includes('mp4') ? 'audio/mp4' : 'audio/webm'
+      audioBlob.value = new Blob(chunks, { type: blobType })
       audioUrl.value = URL.createObjectURL(audioBlob.value)
     }
     
@@ -337,8 +373,18 @@ const startRecording = async () => {
     recordingTimer.value = window.setInterval(() => {
       recordTime.value++
     }, 1000)
-  } catch (e) {
-    ElMessage.error('无法访问麦克风')
+  } catch (e: any) {
+    isRecording.value = false  // 确保异常时重置状态
+    // 区分不同错误类型
+    if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
+      ElMessage.error('麦克风权限被拒绝，请允许浏览器访问麦克风后重试')
+    } else if (e.name === 'NotFoundError') {
+      ElMessage.error('未找到麦克风设备，请检查是否已连接麦克风')
+    } else if (e.name === 'NotReadableError') {
+      ElMessage.error('麦克风被其他应用占用，请关闭其他应用后重试')
+    } else {
+      ElMessage.error('无法访问麦克风: ' + (e.message || '未知错误'))
+    }
   }
 }
 
@@ -368,14 +414,20 @@ const submitRecording = async () => {
   
   isEvaluating.value = true
   try {
-    const res = await pronunciationApi.record(audioBlob.value, currentSentence.value.id)
+    // 传递句子文本作为备选，防止内存中找不到
+    const res = await pronunciationApi.record(
+      audioBlob.value, 
+      currentSentence.value.id,
+      currentSentence.value.text,
+      currentMimeType.value  // 传递录音格式
+    )
     if (res.data) {
       evaluationResult.value = res.data
       // 标记已练习
       currentSentence.value.practiced = true
       ElMessage.success('评测完成')
     }
-  } catch (e) {
+  } catch (e: any) {
     // 模拟评分结果
     evaluationResult.value = {
       score: Math.floor(Math.random() * 30) + 70,
@@ -582,6 +634,17 @@ onUnmounted(() => {
 
 .no-result {
   padding: 40px 0;
+}
+
+.evaluating-progress {
+  text-align: center;
+  padding: 40px 0;
+}
+
+.evaluating-progress .progress-text {
+  margin-top: 16px;
+  color: #909399;
+  font-size: 14px;
 }
 
 .score-circle {

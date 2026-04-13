@@ -4,9 +4,13 @@ AI-powered writing correction
 """
 import os
 import httpx
+import logging
+import time
 from typing import Optional
 from db.connection import get_db
 from models import AISettings
+
+logger = logging.getLogger(__name__)
 
 
 class WritingService:
@@ -88,6 +92,8 @@ class WritingService:
         Returns:
             dict with corrections and score
         """
+        logger.info(f"Writing correction request: text_len={len(text)}, exam_type={exam_type}")
+        
         settings = self._get_settings()
         provider = settings.provider
         model = settings.model
@@ -98,6 +104,7 @@ class WritingService:
         base_url = self._get_base_url(settings)
         
         if not api_key:
+            logger.warning("API Key not configured")
             return {
                 "original_text": text,
                 "corrected_text": text,
@@ -114,6 +121,15 @@ class WritingService:
         ]
         
         try:
+            request_params = {
+                "model": model,
+                "temperature": temperature,
+                "max_tokens": max_tokens
+            }
+            logger.info(f"Writing correction API request: provider={provider}, model={model}, params={request_params}")
+            
+            start_time = time.time()
+            
             async with httpx.AsyncClient(timeout=60.0) as client:
                 response = await client.post(
                     base_url,
@@ -132,8 +148,13 @@ class WritingService:
                 result = response.json()
                 
                 content = result["choices"][0]["message"]["content"]
+                
+                elapsed_ms = (time.time() - start_time) * 1000
+                logger.info(f"Writing correction success: provider={provider}, status={response.status_code}, content_len={len(content)}, elapsed_ms={elapsed_ms:.0f}")
+                
                 return self._parse_correction(text, content)
         except Exception as e:
+            logger.error(f"Writing correction error: {e}", exc_info=True)
             return {
                 "original_text": text,
                 "corrected_text": text,

@@ -10,6 +10,8 @@ import Pronunciation from '../views/Pronunciation.vue'
 import Vocabulary from '../views/Vocabulary.vue'
 import Writing from '../views/Writing.vue'
 import Stats from '../views/Stats.vue'
+import Dictation from '../views/Dictation.vue'
+import Grammar from '../views/Grammar.vue'
 import Settings from '../views/Settings.vue'
 
 const routes = [
@@ -27,7 +29,7 @@ const routes = [
     path: '/chat',
     name: 'Chat',
     component: Chat,
-    meta: { title: 'AI对话', icon: 'ChatDotRound' }
+    meta: { title: 'AI口语陪练', icon: 'ChatDotRound' }
   },
   {
     path: '/listening',
@@ -58,6 +60,18 @@ const routes = [
     name: 'Stats',
     component: Stats,
     meta: { title: '学习中心', icon: 'DataAnalysis' }
+  },
+  {
+    path: '/dictation',
+    name: 'Dictation',
+    component: Dictation,
+    meta: { title: '单词默写', icon: 'EditPen' }
+  },
+  {
+    path: '/grammar',
+    name: 'Grammar',
+    component: Grammar,
+    meta: { title: '语法学习', icon: 'Reading' }
   },
   {
     path: '/settings',

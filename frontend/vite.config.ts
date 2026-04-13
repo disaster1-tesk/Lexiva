@@ -15,6 +15,8 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:8000',
         changeOrigin: true
+        // 不要 rewrite！前端 /api/xxx 会转发到后端 /api/xxx
+        // 后端 router prefix 已经是 /api/xxx
       }
     }
   }

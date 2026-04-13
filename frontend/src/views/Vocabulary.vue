@@ -10,10 +10,18 @@
           <el-icon><Plus /></el-icon>
           添加单词
         </el-button>
-        <el-button @click="showReviewDialog = true" type="success">
+        <el-button @click="startReview" type="success">
           <el-icon><Reading /></el-icon>
           开始复习
           <el-tag size="small" type="danger" v-if="toReviewCount > 0">{{ toReviewCount }}</el-tag>
+        </el-button>
+        <el-button @click="openSpellDialog" type="warning">
+          <el-icon><EditPen /></el-icon>
+          单词默写
+        </el-button>
+        <el-button @click="showAIGenerateDialog = true" type="info">
+          <el-icon><MagicStick /></el-icon>
+          AI生成
         </el-button>
       </div>
     </div>
@@ -195,6 +203,207 @@
         <el-button @click="closeReview">关闭</el-button>
       </template>
     </el-dialog>
+
+    <!-- AI生成单词对话框 -->
+    <el-dialog v-model="showAIGenerateDialog" title="AI生成单词" width="600px" :close-on-click-modal="false">
+      <el-form label-width="80px">
+        <el-form-item label="主题">
+          <el-select v-model="generateForm.topic" placeholder="选择主题">
+            <el-option label="日常英语" value="daily" />
+            <el-option label="商务英语" value="business" />
+            <el-option label="考研英语" value="exam" />
+            <el-option label="雅思词汇" value="ielts" />
+            <el-option label="托福词汇" value="toefl" />
+            <el-option label="科技词汇" value="technology" />
+            <el-option label="医学词汇" value="medical" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="单词数量">
+          <el-slider v-model="generateForm.count" :min="5" :max="20" show-input />
+        </el-form-item>
+      </el-form>
+
+      <!-- 生成中显示进度条 -->
+      <div v-if="isGenerating" class="generate-progress">
+        <el-progress :percentage="generateProgress" :status="generateProgress === 100 ? 'success' : ''" />
+        <div class="progress-text">{{ generateStatus }}</div>
+      </div>
+
+      <!-- 生成完成后展示结果 -->
+      <div v-if="generatedWords.length > 0" class="generated-preview">
+        <div class="preview-header">生成的单词（勾选加入默写）</div>
+        <div class="word-list">
+          <div v-for="(word, idx) in generatedWords" :key="idx" class="word-item">
+            <el-checkbox v-model="word.selected" />
+            <div class="word-info">
+              <span class="word-text">{{ word.word }}</span>
+              <span class="word-phonetic">{{ word.phonetic }}</span>
+              <span class="word-meaning">{{ word.meaning }}</span>
+              <el-tag size="small" type="info">{{ word.type }}</el-tag>
+            </div>
+            <el-button size="small" circle @click="playPronunciation(word.word)">
+              <el-icon><VideoPlay /></el-icon>
+            </el-button>
+          </div>
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="showAIGenerateDialog = false">取消</el-button>
+        <el-button type="primary" @click="startGenerate" :loading="isGenerating">
+          {{ generatedWords.length > 0 ? '重新生成' : '开始生成' }}
+        </el-button>
+        <el-button type="success" @click="startSpellTest" :disabled="selectedGeneratedWords.length === 0">
+          开始默写 ({{ selectedGeneratedWords.length }}个)
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 默写模式对话框 -->
+    <el-dialog v-model="showSpellDialog" title="单词默写" width="650px" :close-on-click-modal="false">
+      <div v-if="spellWords.length === 0" class="spell-start-form">
+        <el-form label-width="80px">
+          <el-form-item label="选择主题">
+            <el-select v-model="generateForm.topic" placeholder="选择默写主题">
+              <el-option label="日常英语" value="daily" />
+              <el-option label="商务英语" value="business" />
+              <el-option label="考研英语" value="exam" />
+              <el-option label="雅思词汇" value="ielts" />
+              <el-option label="托福词汇" value="toefl" />
+              <el-option label="科技词汇" value="technology" />
+              <el-option label="医学词汇" value="medical" />
+              <el-option label="英语短语" value="phrasal_verbs" />
+              <el-option label="习语表达" value="idioms" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="单词数量">
+            <el-slider v-model="generateForm.count" :min="5" :max="20" :marks="{5: '5', 10: '10', 15: '15', 20: '20'}" show-input />
+          </el-form-item>
+        </el-form>
+
+        <!-- 加载状态 -->
+        <div v-if="isGenerating" class="generate-progress">
+          <el-progress :percentage="generateProgress" :status="generateProgress === 100 ? 'success' : ''" />
+          <div class="progress-text">{{ generateStatus }}</div>
+        </div>
+      </div>
+
+      <div v-else class="spell-content">
+        <!-- 进度信息 -->
+        <div class="spell-progress">
+          <div class="progress-header">
+            <span>主题: {{ getTopicName(generateForm.topic) }}</span>
+            <span>进度: {{ currentSpellIndex + 1 }} / {{ spellWords.length }}</span>
+          </div>
+          <el-progress :percentage="((currentSpellIndex + 1) / spellWords.length) * 100" :show-text="false" style="margin-top: 8px" />
+        </div>
+
+        <div class="spell-card" v-if="currentSpellWord">
+          <!-- 显示中文含义，让用户拼写英文 -->
+          <div class="spell-meaning">{{ currentSpellWord.meaning }}</div>
+          <div class="spell-type">类型: {{ currentSpellWord.type }}</div>
+
+          <!-- 播放发音按钮 -->
+          <div class="spell-audio">
+            <el-button type="primary" @click="playPronunciation(currentSpellWord.word)">
+              <el-icon><VideoPlay /></el-icon>
+              播放发音
+            </el-button>
+          </div>
+
+          <!-- 音标跟读功能 -->
+          <div class="phonetic-record">
+            <el-button type="warning" @click="startRecord" :icon="Microphone" :class="{ 'recording': isRecording }">
+              {{ isRecording ? '录音中...' : '跟读音标' }}
+            </el-button>
+            <div v-if="recordResult" class="record-result">
+              <div class="result-row">
+                <span class="result-label">你的发音:</span>
+                <span class="result-value">{{ recordResult.text }}</span>
+              </div>
+              <div class="result-row">
+                <span class="result-label">评分:</span>
+                <el-tag :type="recordResult.score >= 80 ? 'success' : recordResult.score >= 60 ? 'warning' : 'danger'">
+                  {{ recordResult.score }}分
+                </el-tag>
+              </div>
+              <div v-if="recordResult.issues && recordResult.issues.length" class="result-issues">
+                <span v-for="(issue, i) in recordResult.issues" :key="i">{{ issue }}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 拼写输入框 -->
+          <div class="spell-input">
+            <el-input
+              v-model="spellAnswer"
+              placeholder="请输入单词拼写"
+              size="large"
+              @keyup.enter="submitSpell"
+              :disabled="showSpellResult"
+            />
+          </div>
+
+          <!-- 拼写结果 -->
+          <div v-if="showSpellResult" class="spell-result">
+            <el-alert
+              :type="spellResult.correct ? 'success' : 'error'"
+              :title="spellResult.correct ? '拼写正确！' : '拼写错误'"
+              show-icon
+              :closable="false"
+            />
+            <div class="correct-answer">正确答案: {{ currentSpellWord.word }}</div>
+            <div v-if="!spellResult.correct" class="your-answer">你的答案: {{ spellAnswer }}</div>
+          </div>
+
+          <div class="spell-actions">
+            <el-button v-if="!showSpellResult" type="primary" @click="submitSpell" :disabled="!spellAnswer">
+              提交
+            </el-button>
+            <el-button v-if="showSpellResult" type="primary" @click="nextSpellWord">
+              {{ isLastSpellWord ? '查看结果' : '下一题' }}
+            </el-button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 默写完成面板 -->
+      <div v-if="showSpellSummary" class="spell-summary">
+        <h3>默写完成！</h3>
+        <div class="summary-stats">
+          <div class="stat-item correct">
+            <span class="stat-num">{{ spellCorrectCount }}</span>
+            <span class="stat-label">正确</span>
+          </div>
+          <div class="stat-item wrong">
+            <span class="stat-num">{{ spellWrongCount }}</span>
+            <span class="stat-label">错误</span>
+          </div>
+          <div class="stat-item rate">
+            <span class="stat-num">{{ spellAccuracy }}%</span>
+            <span class="stat-label">正确率</span>
+          </div>
+        </div>
+        
+        <div class="summary-actions">
+          <el-button type="success" @click="continueSpellTest">
+            <el-icon><Plus /></el-icon>
+            继续默写更多
+          </el-button>
+          <el-button type="primary" @click="restartSpellTest">
+            <el-icon><RefreshRight /></el-icon>
+            重新开始
+          </el-button>
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="closeSpell">关闭</el-button>
+        <el-button v-if="spellWords.length === 0" type="primary" @click="startSpellTest" :disabled="isGenerating">
+          {{ isGenerating ? 'AI生成中...' : '开始默写' }}
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -204,7 +413,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { vocabApi, listeningApi } from '../api'
 import {
   Notebook, Plus, Reading, Search, VideoPlay,
-  Edit, Delete
+  Edit, Delete, MagicStick, Microphone, RefreshRight,
+  EditPen
 } from '@element-plus/icons-vue'
 
 // 统计数据
@@ -249,17 +459,77 @@ const reviewResults = [
   { label: '认识', value: 'remember', type: 'success' }
 ]
 
+// AI生成单词
+const showAIGenerateDialog = ref(false)
+const generateForm = ref({
+  topic: 'daily',
+  count: 10
+})
+
+// 主题名称映射
+const getTopicName = (topic: string) => {
+  const map: Record<string, string> = {
+    'daily': '日常英语',
+    'business': '商务英语',
+    'exam': '考研英语',
+    'ielts': '雅思词汇',
+    'toefl': '托福词汇',
+    'technology': '科技词汇',
+    'medical': '医学词汇',
+    'phrasal_verbs': '英语短语',
+    'idioms': '习语表达'
+  }
+  return map[topic] || topic
+}
+
+const isGenerating = ref(false)
+const generateProgress = ref(0)
+const generateStatus = ref('')
+const generatedWords = ref<any[]>([])
+
+// 默写模式（直接开始默写）
+const showSpellDialog = ref(false)
+const spellWords = ref<any[]>([])
+const currentSpellIndex = ref(0)
+const currentSpellWord = computed(() => spellWords.value[currentSpellIndex.value])
+const spellAnswer = ref('')
+const showSpellResult = ref(false)
+const spellResult = ref<any>({})
+const spellResults: any[] = []
+const showSpellSummary = ref(false)  // 新增：默写完成面板
+const alreadySpellWords = ref<string[]>([])  // 已默写过的单词（用于继续生成）
+
+// 音标跟读
+const isRecording = ref(false)
+const recordResult = ref<any>(null)
+let mediaRecorder: any = null
+let audioChunks: Blob[] = []
+let recordingStartTime = 0  // 录音开始时间
+
 // 加载单词列表
 const loadWords = async () => {
   try {
     const res = await vocabApi.getList()
-    if (res.data && res.data.words) {
-      allWords.value = res.data.words
-      // 更新统计数据
-      stats.value.total = allWords.value.length
-      stats.value.mastered = allWords.value.filter(w => w.status === 'mastered').length
-      stats.value.learning = allWords.value.filter(w => w.status === 'learning').length
-    }
+    // 后端返回格式: { code: 0, data: { items: [...], total } }
+    const items = res.data?.data?.items || res.data?.items || []
+    const total = res.data?.data?.total || res.data?.total || 0
+    
+    // 转换后端字段名为前端字段
+    allWords.value = items.map((w: any) => ({
+      id: w.id,
+      word: w.word,
+      phonetic: w.phonetic,
+      translation: w.meaning || '',
+      level: getLevelFromStrength(w.memory_strength),
+      status: getStatusFromStrength(w.memory_strength, w.next_review),
+      nextReview: w.next_review ? new Date(w.next_review).toLocaleDateString() : '-',
+      reviewedCount: w.reviewed_count || 0,
+      correctCount: w.correct_count || 0
+    }))
+    // 更新统计数据
+    stats.value.total = total
+    stats.value.mastered = allWords.value.filter(w => w.status === 'mastered').length
+    stats.value.learning = allWords.value.filter(w => w.status === 'learning').length
     filterWords()
   } catch (e) {
     // 使用默认数据
@@ -305,6 +575,18 @@ const filterWords = () => {
 
 const totalWords = computed(() => filteredWords.value.length)
 
+// AI生成单词计算属性
+const selectedGeneratedWords = computed(() => generatedWords.value.filter(w => w.selected))
+
+const isLastSpellWord = computed(() => currentSpellIndex.value >= spellWords.value.length - 1)
+
+const spellCorrectCount = computed(() => spellResults.filter(r => r.correct).length)
+const spellWrongCount = computed(() => spellResults.filter(r => !r.correct).length)
+const spellAccuracy = computed(() => {
+  const total = spellResults.length
+  return total > 0 ? Math.round((spellCorrectCount.value / total) * 100) : 0
+})
+
 const handleSizeChange = (size: number) => {
   pageSize.value = size
   filterWords()
@@ -345,13 +627,28 @@ const getStatusText = (status: string) => {
   return map[status] || '未知'
 }
 
+// 根据记忆强度获取难度等级
+const getLevelFromStrength = (strength: number) => {
+  if (strength >= 4.0) return '简单'
+  if (strength >= 2.5) return '中等'
+  return '困难'
+}
+
+// 根据记忆强度和下次复习时间获取状态
+const getStatusFromStrength = (strength: number, nextReview: string | null) => {
+  if (strength >= 4.0) return 'mastered'
+  if (nextReview && new Date(nextReview) <= new Date()) return 'review'
+  return 'learning'
+}
+
 // 播放发音
 const playPronunciation = async (word: string) => {
   try {
     const res = await listeningApi.tts(word, 1.0, 'en-US-AriaNeural')
-    if (res.data && res.data.audio) {
+    // API 返回格式: { code: 0, data: { success: true, audio: "..." } }
+    if (res.data && res.data.data && res.data.data.audio) {
       // 解码 base64 音频数据
-      const byteCharacters = atob(res.data.audio)
+      const byteCharacters = atob(res.data.data.audio)
       const byteNumbers = new Array(byteCharacters.length)
       for (let i = 0; i < byteCharacters.length; i++) {
         byteNumbers[i] = byteCharacters.charCodeAt(i)
@@ -452,9 +749,9 @@ const saveWord = async () => {
 const loadToReviewWords = async () => {
   try {
     const res = await vocabApi.toReview()
-    if (res.data && res.data.words) {
-      toReviewCount.value = res.data.words.length
-    }
+    // 后端返回格式: { code: 0, data: { items: [...], total } }
+    const items = res.data?.data?.items || res.data?.items || []
+    toReviewCount.value = items.length
   } catch (e) {
     toReviewCount.value = allWords.value.filter(w => w.status === 'review').length
   }
@@ -508,6 +805,309 @@ const closeReview = () => {
   showReviewResult.value = false
   currentReviewIndex.value = 0
   filterWords()
+}
+
+// 开始AI生成
+const startGenerate = async () => {
+  isGenerating.value = true
+  generateProgress.value = 0
+  generateStatus.value = '正在连接AI服务...'
+  generatedWords.value = []
+
+  try {
+    const res = await vocabApi.generate({
+      topic: generateForm.value.topic,
+      count: generateForm.value.count
+    })
+
+    generateProgress.value = 30
+    generateStatus.value = 'AI正在生成单词...'
+
+    // 解析返回的单词
+    const words = res.data?.data?.words || res.data?.words || []
+    generatedWords.value = words.map((w: any) => ({
+      ...w,
+      selected: true
+    }))
+
+    generateProgress.value = 100
+    generateStatus.value = '生成完成！'
+  } catch (e: any) {
+    ElMessage.error(e.message || '生成失败，请重试')
+    generateStatus.value = '生成失败'
+  } finally {
+    isGenerating.value = false
+  }
+}
+
+// 开始AI生成（用于默写模式）
+const startAIForSpell = async () => {
+  isGenerating.value = true
+  generateProgress.value = 0
+  generateStatus.value = '正在连接AI服务...'
+  spellWords.value = []
+
+  try {
+    const res = await vocabApi.generate({
+      topic: generateForm.value.topic,
+      count: generateForm.value.count,
+      exclude_words: alreadySpellWords.value  // 排除已默写过的单词
+    })
+
+    generateProgress.value = 50
+    generateStatus.value = 'AI正在生成单词...'
+
+    // 解析返回的单词，直接进入默写
+    const words = res.data?.data?.words || res.data?.words || []
+    if (words.length === 0) {
+      ElMessage.error('未能生成单词，请重试')
+      return
+    }
+
+    spellWords.value = words.map((w: any) => ({
+      ...w,
+      selected: true
+    }))
+    
+    // 记录已生成的单词（用于继续生成时排除）
+    words.forEach((w: any) => {
+      if (!alreadySpellWords.value.includes(w.word)) {
+        alreadySpellWords.value.push(w.word)
+      }
+    })
+
+    generateProgress.value = 100
+    generateStatus.value = '开始默写!'
+
+    // 自动开始默写
+    currentSpellIndex.value = 0
+    spellAnswer.value = ''
+    showSpellResult.value = false
+    recordResult.value = null
+    spellResults.length = 0
+    showSpellSummary.value = false
+  } catch (e: any) {
+    ElMessage.error(e.message || '生成失败，请重试')
+    generateStatus.value = '生成失败'
+  } finally {
+    isGenerating.value = false
+  }
+}
+
+// 开始默写（从AI生成对话框中选择单词）
+const startSpellTest = () => {
+  if (generatedWords.value.length > 0) {
+    // 使用AI生成对话框中已选择的单词
+    const selected = selectedGeneratedWords.value
+    if (selected.length === 0) {
+      ElMessage.warning('请选择要默写的单词')
+      return
+    }
+    // 设置默写单词
+    spellWords.value = selected.map((w: any) => ({
+      ...w,
+      word: w.word,
+      meaning: w.meaning,
+      phonetic: w.phonetic,
+      type: w.type
+    }))
+    // 关闭AI生成对话框，打开默写对话框
+    showAIGenerateDialog.value = false
+    showSpellDialog.value = true
+    currentSpellIndex.value = 0
+    spellAnswer.value = ''
+    showSpellResult.value = false
+    recordResult.value = null
+    spellResults.length = 0
+    showSpellSummary.value = false
+    ElMessage.success(`已选择 ${selected.length} 个单词开始默写`)
+  } else {
+    // 兼容旧代码：直接进入默写模式（会调用AI生成）
+    startAIForSpell()
+  }
+}
+
+// 继续默写更多单词
+const continueSpellTest = async () => {
+  showSpellSummary.value = false
+  await startAIForSpell()
+}
+
+// 重新开始
+const restartSpellTest = () => {
+  alreadySpellWords.value = []  // 清空已默写记录
+  spellWords.value = []
+  currentSpellIndex.value = 0
+  showSpellSummary.value = false
+  generateProgress.value = 0
+  generateStatus.value = ''
+}
+
+// 提交拼写
+const submitSpell = async () => {
+  const word = currentSpellWord.value
+
+  try {
+    const res = await vocabApi.spellCheck({
+      word: word.word,
+      answer: spellAnswer.value
+    })
+    spellResult.value = res.data?.data || res.data
+    showSpellResult.value = true
+
+    spellResults.push({
+      correct: spellResult.value.correct,
+      answer: spellAnswer.value
+    })
+  } catch (e) {
+    // 本地比对
+    const correct = spellAnswer.value.toLowerCase().trim() === word.word.toLowerCase()
+    spellResult.value = {
+      correct,
+      correct_answer: word.word
+    }
+    showSpellResult.value = true
+
+    spellResults.push({
+      correct,
+      answer: spellAnswer.value
+    })
+  }
+}
+
+// 打开默写对话框（从"单词默写"按钮进入）
+const openSpellDialog = () => {
+  // 显式重置为默认值，防止状态污染
+  generateForm.value = {
+    topic: 'daily',
+    count: 10
+  }
+  alreadySpellWords.value = []  // 清空历史
+  spellWords.value = []  // 清空当前单词
+  currentSpellIndex.value = 0
+  showSpellSummary.value = false
+  showSpellResult.value = false
+  spellResult.value = {}
+  spellAnswer.value = ''
+  generateProgress.value = 0
+  generateStatus.value = ''
+  generatedWords.value = []  // 清空AI生成的单词
+  showSpellDialog.value = true
+}
+
+// 下一题
+const nextSpellWord = () => {
+  if (currentSpellIndex.value < spellWords.value.length - 1) {
+    currentSpellIndex.value++
+    spellAnswer.value = ''
+    showSpellResult.value = false
+    recordResult.value = null
+    spellResult.value = {}
+  } else {
+    // 默写完成，显示总结面板
+    showSpellSummary.value = true
+  }
+}
+
+// 关闭默写
+const closeSpell = () => {
+  showSpellDialog.value = false
+  showSpellResult.value = false
+  showSpellSummary.value = false
+  currentSpellIndex.value = 0
+  spellAnswer.value = ''
+  recordResult.value = null
+  spellResults.length = 0
+  // 清空已默写单词记录（除非是手动关闭）
+  // alreadySpellWords.value = []  // 可选：是否保留继续默写的能力
+}
+
+// 音标跟读
+const startRecord = async () => {
+  if (isRecording.value) {
+    // 停止录音
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+      mediaRecorder.stop()
+    }
+    isRecording.value = false
+    return
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    // 固定使用 WebM 格式（所有浏览器都支持）
+    let mimeType = 'audio/webm'
+    mediaRecorder = new MediaRecorder(stream, { mimeType })
+    
+    // 验证 MediaRecorder 初始化是否成功
+    if (!mediaRecorder || mediaRecorder.state === 'inactive') {
+      stream.getTracks().forEach(track => track.stop())
+      throw new Error('MediaRecorder 初始化失败')
+    }
+    
+    audioChunks = []
+
+    mediaRecorder.ondataavailable = (e: any) => {
+      audioChunks.push(e.data)
+    }
+
+    mediaRecorder.onstop = async () => {
+      // 检查录音时长
+      const recordingDuration = Date.now() - recordingStartTime
+      if (recordingDuration < 500) {
+        isRecording.value = false
+        ElMessage.warning('录音时间太短，请确保完整录音后重试')
+        stream.getTracks().forEach(track => track.stop())
+        return
+      }
+      
+      const blobType = mimeType.includes('mp4') ? 'audio/mp4' : 'audio/webm'
+      const audioBlob = new Blob(audioChunks, { type: blobType })
+      const reader = new FileReader()
+      reader.onload = async () => {
+        const base64 = (reader.result as string).split(',')[1]
+
+        try {
+          const res = await vocabApi.phoneticCheck({
+            word: currentSpellWord.value.word,
+            phonetic: currentSpellWord.value.phonetic,
+            audio: base64
+          })
+          recordResult.value = res.data?.data || res.data
+        } catch (e: any) {
+          ElMessage.error(e.message || '评测失败')
+        }
+      }
+      reader.readAsDataURL(audioBlob)
+
+      // 停止所有轨道
+      stream.getTracks().forEach(track => track.stop())
+    }
+
+    mediaRecorder.start()
+    recordingStartTime = Date.now()
+    isRecording.value = true
+
+    // 3秒后自动停止
+    setTimeout(() => {
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        mediaRecorder.stop()
+        isRecording.value = false
+      }
+    }, 3000)
+  } catch (e: any) {
+    isRecording.value = false  // 确保异常时重置状态
+    // 区分不同错误类型
+    if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
+      ElMessage.error('麦克风权限被拒绝，请点击浏览器地址栏左侧的锁定图标允许访问')
+    } else if (e.name === 'NotFoundError' || e.name === 'DevicesNotFoundError') {
+      ElMessage.error('未找到麦克风设备，请确保已连接麦克风')
+    } else if (e.name === 'NotReadableError' || e.name === 'TrackStartError') {
+      ElMessage.error('麦克风已被其他应用占用，请关闭其他录音应用')
+    } else {
+      ElMessage.error('无法访问麦克风，请检查系统权限设置')
+    }
+  }
 }
 
 // 监听复习对话框打开
@@ -654,5 +1254,216 @@ onMounted(() => {
   display: flex;
   justify-content: center;
   gap: 20px;
+}
+
+/* AI生成对话框样式 */
+.generate-progress {
+  margin: 20px 0;
+  text-align: center;
+}
+
+.progress-text {
+  margin-top: 10px;
+  color: #606266;
+  font-size: 14px;
+}
+
+.generated-preview {
+  margin-top: 20px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.preview-header {
+  font-size: 14px;
+  font-weight: 500;
+  color: #303133;
+  margin-bottom: 12px;
+}
+
+.word-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.word-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  background: #f5f7fa;
+  border-radius: 8px;
+}
+
+.word-info {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.word-info .word-text {
+  font-size: 16px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.word-info .word-phonetic {
+  font-size: 14px;
+  color: #909399;
+}
+
+.word-info .word-meaning {
+  font-size: 14px;
+  color: #606266;
+}
+
+/* 拼写对话框样式 */
+.spell-content {
+  padding: 20px 0;
+}
+
+.spell-progress {
+  margin-bottom: 20px;
+  font-size: 14px;
+  color: #606266;
+}
+
+.spell-card {
+  text-align: center;
+  padding: 30px 20px;
+  background: #f5f7fa;
+  border-radius: 12px;
+}
+
+.spell-meaning {
+  font-size: 24px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 12px;
+}
+
+.spell-type {
+  font-size: 14px;
+  color: #909399;
+  margin-bottom: 20px;
+}
+
+.spell-audio {
+  margin-bottom: 20px;
+}
+
+.phonetic-record {
+  margin-bottom: 20px;
+  padding: 16px;
+  background: #fff;
+  border-radius: 8px;
+}
+
+.phonetic-record .recording {
+  background: #f56c6c;
+  border-color: #f56c6c;
+  color: #fff;
+}
+
+.record-result {
+  margin-top: 16px;
+  text-align: left;
+}
+
+.result-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.result-label {
+  color: #909399;
+  font-size: 14px;
+}
+
+.result-value {
+  color: #303133;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.result-issues {
+  margin-top: 8px;
+  font-size: 13px;
+  color: #e6a23c;
+}
+
+.spell-input {
+  margin-bottom: 20px;
+}
+
+.spell-input .el-input {
+  max-width: 300px;
+}
+
+.spell-result {
+  margin-bottom: 20px;
+}
+
+.correct-answer,
+.your-answer {
+  margin-top: 12px;
+  font-size: 14px;
+  color: #606266;
+}
+
+.spell-actions {
+  margin-top: 20px;
+}
+
+/* 默写结果统计 */
+.spell-summary {
+  margin-top: 20px;
+  text-align: center;
+  padding: 20px;
+  background: #f0f9eb;
+  border-radius: 8px;
+}
+
+.spell-summary h3 {
+  margin: 0 0 16px 0;
+  color: #67c23a;
+}
+
+.summary-stats {
+  display: flex;
+  justify-content: center;
+  gap: 30px;
+}
+
+.stat-item {
+  text-align: center;
+}
+
+.stat-item .stat-num {
+  display: block;
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.stat-item .stat-label {
+  font-size: 14px;
+  color: #909399;
+}
+
+.stat-item.correct .stat-num {
+  color: #67c23a;
+}
+
+.stat-item.wrong .stat-num {
+  color: #f56c6c;
+}
+
+.stat-item.rate .stat-num {
+  color: #409eff;
 }
 </style>

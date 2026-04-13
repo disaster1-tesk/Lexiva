@@ -33,6 +33,7 @@
           <div class="stat-info">
             <div class="stat-value">{{ stats.totalConversations }}</div>
             <div class="stat-label">AI 对话次数</div>
+            <div class="stat-sub" v-if="stats.chatMinutes > 0">⏱ {{ stats.chatMinutes }} 分钟</div>
           </div>
         </div>
       </el-col>
@@ -48,13 +49,14 @@
         </div>
       </el-col>
       <el-col :span="6">
-        <div class="stat-card yellow">
+        <div class="stat-card green">
           <div class="stat-icon">
             <el-icon :size="32"><Microphone /></el-icon>
           </div>
           <div class="stat-info">
-            <div class="stat-value">{{ stats.totalPractice }}</div>
-            <div class="stat-label">发音练习</div>
+            <div class="stat-value">{{ stats.pronunciationScore > 0 ? Math.round(stats.pronunciationScore) + '分' : '--' }}</div>
+            <div class="stat-label">发音评分</div>
+            <div class="stat-sub" v-if="stats.totalPronunciations > 0">{{ stats.totalPronunciations }} 次练习</div>
           </div>
         </div>
       </el-col>
@@ -150,7 +152,7 @@ import { useRouter } from 'vue-router'
 import { statisticsApi } from '../api'
 import {
   Reading, ChatDotRound, Edit, Microphone,
-  Sunrise, Notebook, Headset
+  Sunrise, Notebook, Headset, DataAnalysis
 } from '@element-plus/icons-vue'
 
 const router = useRouter()
@@ -160,7 +162,10 @@ const stats = ref({
   totalWords: 156,
   totalConversations: 28,
   totalWritings: 12,
-  totalPractice: 45
+  totalGrammar: 0,
+  chatMinutes: 0,
+  pronunciationScore: 0,
+  totalPronunciations: 0
 })
 
 // 快捷入口
@@ -169,6 +174,7 @@ const quickActions = [
   { path: '/pronunciation', label: '发音评测', icon: 'Microphone', color: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' },
   { path: '/listening', label: '听力训练', icon: 'Headset', color: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)' },
   { path: '/vocabulary', label: '单词本', icon: 'Notebook', color: 'linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)' },
+  { path: '/grammar', label: '语法学习', icon: 'DataAnalysis', color: 'linear-gradient(135deg, #a18cd1 0%, #fbc2eb 100%)' },
   { path: '/writing', label: '写作批改', icon: 'Edit', color: 'linear-gradient(135deg, #fa709a 0%, #fee140 100%)' }
 ]
 
@@ -208,12 +214,18 @@ const recentActivities = [
 onMounted(async () => {
   try {
     const res = await statisticsApi.getSummary()
-    if (res.data) {
+    // 后端返回格式: { code: 0, data: { total_words, ... } }
+    // 兼容多种响应格式
+    const data = res?.data?.data ?? res?.data ?? null
+    if (data) {
       stats.value = {
-        totalWords: res.data.total_words || 0,
-        totalConversations: res.data.total_conversations || 0,
-        totalWritings: res.data.total_writings || 0,
-        totalPractice: res.data.total_pronunciation || 0
+        totalWords: data.total_words || 0,
+        totalConversations: data.total_conversations || 0,
+        totalWritings: data.total_writings || 0,
+        totalGrammar: data.total_grammar_learned || data.total_grammar_exercises || 0,
+        chatMinutes: data.chat_minutes || 0,
+        pronunciationScore: data.pronunciation_avg_score || 0,
+        totalPronunciations: data.total_pronunciations || 0
       }
     }
   } catch (e) {
@@ -284,6 +296,10 @@ onMounted(async () => {
   background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
 }
 
+.stat-card.purple {
+  background: linear-gradient(135deg, #a18cd1 0%, #fbc2eb 100%);
+}
+
 .stat-icon {
   width: 56px;
   height: 56px;
@@ -306,6 +322,12 @@ onMounted(async () => {
 .stat-label {
   font-size: 14px;
   opacity: 0.9;
+  margin-top: 4px;
+}
+
+.stat-sub {
+  font-size: 12px;
+  opacity: 0.8;
   margin-top: 4px;
 }
 

@@ -16,25 +16,25 @@ router = APIRouter(prefix="/api/pronunciation", tags=["pronunciation"])
 # Evaluation sentences database
 SENTENCES = {
     "beginner": [
-        {"id": 1, "text": "The cat is sleeping on the mat.", "difficulty": "beginner"},
-        {"id": 2, "text": "I like to read books in the morning.", "difficulty": "beginner"},
-        {"id": 3, "text": "She goes to school every day.", "difficulty": "beginner"},
-        {"id": 4, "text": "They are playing in the park.", "difficulty": "beginner"},
-        {"id": 5, "text": "The weather is very nice today.", "difficulty": "beginner"},
+        {"id": 1, "text": "The cat is sleeping on the mat.", "difficulty": "beginner", "translation": "猫正睡在垫子上。"},
+        {"id": 2, "text": "I like to read books in the morning.", "difficulty": "beginner", "translation": "我喜欢在早晨读书。"},
+        {"id": 3, "text": "She goes to school every day.", "difficulty": "beginner", "translation": "她每天去上学。"},
+        {"id": 4, "text": "They are playing in the park.", "difficulty": "beginner", "translation": "他们正在公园里玩耍。"},
+        {"id": 5, "text": "The weather is very nice today.", "difficulty": "beginner", "translation": "今天天气非常好。"},
     ],
     "intermediate": [
-        {"id": 11, "text": "Would you mind opening the window, please?", "difficulty": "intermediate"},
-        {"id": 12, "text": "I have been studying English for three years.", "difficulty": "intermediate"},
-        {"id": 13, "text": "If I had more time, I would travel around the world.", "difficulty": "intermediate"},
-        {"id": 14, "text": "The movie we watched last night was really interesting.", "difficulty": "intermediate"},
-        {"id": 15, "text": "She behaves as if she were the boss.", "difficulty": "intermediate"},
+        {"id": 11, "text": "Would you mind opening the window, please?", "difficulty": "intermediate", "translation": "你介意打开窗户吗？"},
+        {"id": 12, "text": "I have been studying English for three years.", "difficulty": "intermediate", "translation": "我已经学习英语三年了。"},
+        {"id": 13, "text": "If I had more time, I would travel around the world.", "difficulty": "intermediate", "translation": "如果我有更多时间，我会环游世界。"},
+        {"id": 14, "text": "The movie we watched last night was really interesting.", "difficulty": "intermediate", "translation": "我们昨晚看的那部电影非常有趣。"},
+        {"id": 15, "text": "She behaves as if she were the boss.", "difficulty": "intermediate", "translation": "她表现得好像自己是老板。"},
     ],
     "advanced": [
-        {"id": 21, "text": "Notwithstanding the numerous challenges, the project was completed successfully.", "difficulty": "advanced"},
-        {"id": 22, "text": "The aforementioned criteria will be evaluated by the committee.", "difficulty": "advanced"},
-        {"id": 23, "text": "Had I been aware of the consequences, I would have acted differently.", "difficulty": "advanced"},
-        {"id": 24, "text": "Nevertheless, the data suggests a significant correlation.", "difficulty": "advanced"},
-        {"id": 25, "text": "It is imperative that all stakeholders participate actively.", "difficulty": "advanced"},
+        {"id": 21, "text": "Notwithstanding the numerous challenges, the project was completed successfully.", "difficulty": "advanced", "translation": "尽管面临众多挑战，项目还是成功完成了。"},
+        {"id": 22, "text": "The aforementioned criteria will be evaluated by the committee.", "difficulty": "advanced", "translation": "上述标准将由委员会评估。"},
+        {"id": 23, "text": "Had I been aware of the consequences, I would have acted differently.", "difficulty": "advanced", "translation": "如果我知道后果，我会采取不同的行动。"},
+        {"id": 24, "text": "Nevertheless, the data suggests a significant correlation.", "difficulty": "advanced", "translation": "然而，数据表明存在显著的相关性。"},
+        {"id": 25, "text": "It is imperative that all stakeholders participate actively.", "difficulty": "advanced", "translation": "所有利益相关者都必须积极参与。"},
     ]
 }
 
@@ -110,9 +110,12 @@ async def evaluate_pronunciation(
 @router.post("/record")
 async def record_audio(
     audio: UploadFile = File(...),
-    sentence_id: str = Form(...)
+    sentence_id: str = Form(...),
+    sentence_text: str = Form(""),  # 接收前端传入的句子文本作为备选
+    mime_type: str = Form("audio/webm")  # 接收录音格式
 ):
     """Record and evaluate pronunciation"""
+    logger.info(f"Pronunciation record request: sentence_id={sentence_id}, mime_type={mime_type}")
     try:
         # 获取参考句子文本
         reference = ""
@@ -124,15 +127,18 @@ async def record_audio(
             if reference:
                 break
         
+        # 如果内存中找不到，使用前端传入的句子文本
+        if not reference and sentence_text:
+            reference = sentence_text
+        
         if not reference:
-            # 尝试从前端数据中查找
-            pass
+            raise HTTPException(status_code=400, detail="未找到对应的句子，请刷新页面后重试")
         
         # 读取音频文件
         audio_data = await audio.read()
         
-        # 使用 Whisper 转写
-        result = await whisper_service.transcribe(audio_data, language="en")
+        # 使用 Whisper 转写，传递 mime_type
+        result = await whisper_service.transcribe(audio_data, language="en", mime_type=mime_type)
         
         if not result.get("success"):
             raise HTTPException(status_code=500, detail=result.get("error", "Transcription failed"))
@@ -153,6 +159,40 @@ async def record_audio(
         else:
             feedback.append("Keep trying! Listen to the reference and try again.")
         
+        # ========== 持久化评测记录到数据库 ==========
+        try:
+            from db.connection import get_db
+            from models import Statistics
+            from datetime import datetime, timezone
+            
+            session = next(get_db())
+            try:
+                today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                stats = session.query(Statistics).filter(Statistics.date == today).first()
+                if not stats:
+                    stats = Statistics(date=today)
+                    session.add(stats)
+                    session.flush()
+                
+                stats.pronunciation_count += 1
+                # 更新平均分（使用滑动平均）
+                old_avg = stats.pronunciation_avg_score or 0
+                count = stats.pronunciation_count
+                stats.pronunciation_avg_score = ((old_avg * (count - 1)) + score) / count
+                
+                session.commit()
+            except Exception as db_error:
+                session.rollback()
+                logger.warning(f"Failed to save pronunciation stats: {db_error}")
+            finally:
+                try:
+                    session.close()
+                except Exception:
+                    pass
+        except Exception as db_error:
+            logger.warning(f"Database connection failed: {db_error}")
+        # ========== 持久化结束 ==========
+        
         return {
             "score": score,
             "fluency": min(100, score + 10),
@@ -164,6 +204,8 @@ async def record_audio(
             "reference": reference
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Recording error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
