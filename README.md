@@ -95,6 +95,40 @@ Lexiva 是一款面向学生的 **AI 英语学习 Web 系统**，核心定位是
 
 ---
 
+## 🐳 Docker 部署（推荐）
+
+### 快速启动
+
+```bash
+# 1. 克隆项目
+git clone https://github.com/your-repo/lexiva.git
+cd lexiva
+
+# 2. 复制环境变量配置
+cp backend/.env.example backend/.env
+# 编辑 backend/.env 填入您的 API Keys
+
+# 3. 使用启动脚本
+./run.sh docker
+```
+
+### 手动启动
+
+```bash
+# 构建并启动
+docker-compose up -d --build
+
+# 查看日志
+docker-compose logs -f
+
+# 停止服务
+docker-compose down
+```
+
+> ✅ 后端: http://localhost:8000 | 前端: http://localhost:5173 | API 文档: http://localhost:8000/docs
+
+---
+
 ## 🚀 快速开始
 
 ### 环境要求
@@ -131,7 +165,15 @@ npm run dev
 
 ```
 lexiva/
-├── backend/                   # FastAPI 后端
+├── Dockerfile                  # Docker 镜像配置
+├── docker-compose.yml          # Docker Compose 配置
+├── run.sh                      # 项目启动脚本
+├── pyproject.toml              # Python 项目配置
+├── README.md                   # 本文件
+│
+├── backend/                    # FastAPI 后端
+│   ├── .env.example           # 环境变量模板
+│   ├── api/                   # API 路由
 │   ├── api/                   # API 路由
 │   │   ├── chat.py            # AI 对话
 │   │   ├── vocabulary.py      # 词汇管理
