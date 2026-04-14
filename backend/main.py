@@ -56,6 +56,7 @@ def get_cors_origins():
         "http://localhost:3000",  # Create React App
         "http://127.0.0.1:5173",
         "http://127.0.0.1:3000",
+        "*.ngrok-free.app"
     ]
 
 cors_origins = get_cors_origins()

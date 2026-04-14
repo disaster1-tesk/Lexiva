@@ -176,7 +176,7 @@ class FasterWhisperProvider(WhisperProvider):
             if not conversion_success:
                 return {
                     "success": False,
-                    "error": "音频格式转换失败，请确保已录制完整音频后重试",
+                    "error": "音频文件已损坏，请重新录制",
                     "text": ""
                 }
 

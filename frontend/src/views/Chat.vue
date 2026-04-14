@@ -724,9 +724,23 @@ const sendVoiceMessage = async (audioBlob: Blob, mimeType: string = 'audio/webm'
     }
   } catch (error: any) {
     console.error('语音对话失败:', error)
-    // 确保录音状态被重置
     isRecording.value = false
-    ElMessage.error('语音识别失败: ' + (error.response?.data?.detail || error.message || '请检查麦克风权限后重试'))
+    
+    // 提取错误信息，根据不同错误类型显示友好提示
+    const errMsg = error.response?.data?.detail || error.message || ''
+    let userHint = '请检查麦克风权限后重试'
+    
+    if (errMsg.includes('录音太短')) {
+      userHint = '录音时间太短，请确保完整录音后松开麦克风'
+    } else if (errMsg.includes('未能识别语音')) {
+      userHint = '未检测到清晰语音，请再说一次'
+    } else if (errMsg.includes('音频格式转换失败') || errMsg.includes('音频文件已损坏')) {
+      userHint = '音频文件损坏，请重新录制'
+    } else if (errMsg.includes('语音对话失败')) {
+      userHint = '对话暂时失败，请稍后重试'
+    }
+    
+    ElMessage.error('语音识别失败: ' + userHint)
     messages.value.push({
       role: 'assistant',
       content: '抱歉，语音对话失败了。请稍后重试。',
