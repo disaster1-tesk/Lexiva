@@ -78,7 +78,8 @@ class AISettings(Base):
     __tablename__ = "ai_settings"
     
     id = Column(Integer, primary_key=True, autoincrement=True)
-    provider = Column(String(50), default="deepseek")  # deepseek, openai, ollama
+    # LLM 厂商: deepseek, openai, ollama, qwen, zhipu, anthropic, google
+    provider = Column(String(50), default="deepseek")
     api_key = Column(String(200))
     model = Column(String(100), default="deepseek-chat")
     temperature = Column(Float, default=0.7)
@@ -86,17 +87,39 @@ class AISettings(Base):
     top_p = Column(Float, default=1.0)
     base_url = Column(String(200))  # For Ollama custom endpoint
     
-    # TTS 配置
-    tts_provider = Column(String(20), default="edge")  # edge, tencent
+    # TTS 配置: edge, tencent, volcengine, aliyun, baidu
+    tts_provider = Column(String(20), default="edge")
     tts_model = Column(String(50), default="en-US-AriaNeural")
     # 腾讯云 TTS 配置
     tencent_secret_id = Column(String(100))
     tencent_secret_key = Column(String(100))
     tencent_app_id = Column(String(50))
+    # 火山引擎 TTS 配置
+    volcengine_app_id = Column(String(50))
+    volcengine_secret_id = Column(String(100))
+    volcengine_secret_key = Column(String(100))
+    # 阿里云 TTS 配置
+    aliyun_access_key_id = Column(String(100))
+    aliyun_access_key_secret = Column(String(100))
+    # 百度语音 TTS 配置
+    baidu_app_id = Column(String(50))
+    baidu_api_key = Column(String(100))
+    baidu_secret_key = Column(String(100))
     
-    # 发音评测配置 (Whisper)
-    whisper_provider = Column(String(20), default="faster-whisper")  # faster-whisper, openai, tencent
+    # 发音评测配置 (Whisper/ASR): faster-whisper, openai, tencent, volcengine, aliyun, xfyun
+    whisper_provider = Column(String(20), default="faster-whisper")
     whisper_model = Column(String(20), default="base")  # tiny, base, small, medium
+    # 火山引擎 ASR 配置
+    volcengine_asr_app_id = Column(String(50))
+    volcengine_asr_secret_id = Column(String(100))
+    volcengine_asr_secret_key = Column(String(100))
+    # 阿里云 ASR 配置
+    aliyun_asr_access_key_id = Column(String(100))
+    aliyun_asr_access_key_secret = Column(String(100))
+    # 讯飞语音 ASR 配置
+    xfyun_app_id = Column(String(50))
+    xfyun_api_key = Column(String(100))
+    xfyun_api_secret = Column(String(100))
     
     created_at = Column(DateTime, default=utc_now)
     updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)

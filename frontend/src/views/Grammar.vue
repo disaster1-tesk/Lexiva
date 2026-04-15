@@ -212,7 +212,7 @@
     <el-dialog v-model="showAIGenerateDialog" title="AI生成语法" width="600px" :close-on-click-modal="false">
       <el-form label-width="80px">
         <el-form-item label="语法分类">
-          <el-select v-model="generateForm.category" placeholder="选择分类">
+          <el-select v-model="generateForm.category" placeholder="选择分类" filterable allow-create>
             <el-option label="时态" value="tenses" />
             <el-option label="从句" value="clauses" />
             <el-option label="非谓语" value="nonfinite" />
@@ -220,7 +220,26 @@
             <el-option label="虚拟语气" value="subjunctive" />
             <el-option label="倒装句" value="inversion" />
             <el-option label="强调句" value="emphasis" />
+            <el-option label="定语从句" value="relative_clause" />
+            <el-option label="名词性从句" value="noun_clause" />
+            <el-option label="状语从句" value="adverbial_clause" />
+            <el-option label="比较级" value="comparative" />
+            <el-option label="最高级" value="superlative" />
+            <el-option label="情态动词" value="modal_verbs" />
+            <el-option label="独立主格" value="absolute_construction" />
+            <el-option label="省略句" value="ellipsis" />
           </el-select>
+          <el-input
+            v-if="!isPresetCategory"
+            v-model="customCategory"
+            placeholder="输入自定义分类"
+            style="margin-top: 8px"
+            @keyup.enter="applyCustomCategory"
+          >
+            <template #append>
+              <el-button @click="applyCustomCategory">使用</el-button>
+            </template>
+          </el-input>
         </el-form-item>
         <el-form-item label="语法点数量">
           <el-slider v-model="generateForm.count" :min="1" :max="5" show-input />
@@ -294,10 +313,31 @@ const generateForm = ref({
   category: 'tenses',
   count: 1
 })
+const customCategory = ref('')  // 自定义分类输入
 const isGenerating = ref(false)
 const generateProgress = ref(0)
 const generateStatus = ref('')
 const generatedTopics = ref<any[]>([])
+
+// 预设分类列表（用于判断是否为自定义）
+const presetCategories = [
+  'tenses', 'clauses', 'nonfinite', 'voice', 'subjunctive', 'inversion', 'emphasis',
+  'relative_clause', 'noun_clause', 'adverbial_clause', 'comparative', 'superlative',
+  'modal_verbs', 'absolute_construction', 'ellipsis'
+]
+
+// 判断当前分类是否为预设
+const isPresetCategory = computed(() => {
+  return presetCategories.includes(generateForm.value.category)
+})
+
+// 应用自定义分类
+const applyCustomCategory = () => {
+  if (customCategory.value.trim()) {
+    generateForm.value.category = customCategory.value.trim()
+    ElMessage.success(`已选择分类: ${customCategory.value.trim()}`)
+  }
+}
 
 const isLastExercise = computed(() => {
   if (!currentTopic.value) return true

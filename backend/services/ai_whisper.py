@@ -8,6 +8,8 @@ import asyncio
 import logging
 import time
 import json
+import shutil
+import tempfile
 from typing import Optional
 from abc import ABC, abstractmethod
 
@@ -32,6 +34,22 @@ try:
 except ImportError:
     WHISPER_CPP_AVAILABLE = False
     logger.warning("pywhispercpp not installed. Run: pip install pywhispercpp for faster ASR")
+
+
+def _check_ffmpeg() -> tuple[bool, str]:
+    """检查 ffmpeg 是否可用，返回 (可用, 路径或错误信息)"""
+    ffmpeg_path = shutil.which("ffmpeg")
+    if ffmpeg_path:
+        return True, ffmpeg_path
+    return False, "ffmpeg not found. Please install ffmpeg: winget install ffmpeg"
+
+
+def _get_ffmpeg_cmd() -> list[str]:
+    """获取 ffmpeg 命令，根据系统尝试 .exe 后缀"""
+    if os.name == 'nt' and not shutil.which("ffmpeg"):
+        # Windows 上尝试直接调用
+        return ["ffmpeg.exe"]
+    return ["ffmpeg"]
 
 
 class WhisperProvider(ABC):
@@ -78,10 +96,19 @@ class FasterWhisperProvider(WhisperProvider):
                 "text": ""
             }
         
+        # 检查 ffmpeg 可用性
+        ffmpeg_ok, ffmpeg_msg = _check_ffmpeg()
+        if not ffmpeg_ok:
+            logger.error(f"ffmpeg not available: {ffmpeg_msg}")
+            return {
+                "success": False,
+                "error": f"ffmpeg 未安装。请先安装 ffmpeg:\n1. 运行: winget install ffmpeg\n2. 重启终端后重试",
+                "text": ""
+            }
+        
         start_time = time.time()
         
         try:
-            import tempfile
             import subprocess
             
             # 根据 mime_type 动态决定文件扩展名
@@ -217,7 +244,12 @@ class FasterWhisperProvider(WhisperProvider):
     async def _try_ffmpeg_fallback(self, original_path: str) -> Optional[str]:
         """方法3: 更宽松的 ffmpeg 处理，处理损坏或不完整的 WebM"""
         import subprocess
-        import shutil
+
+        # 检查 ffmpeg 可用性
+        ffmpeg_ok, ffmpeg_msg = _check_ffmpeg()
+        if not ffmpeg_ok:
+            logger.error(f"ffmpeg not available: {ffmpeg_msg}")
+            return None
 
         # 检查原始文件状态
         if not os.path.exists(original_path):
@@ -363,10 +395,21 @@ class WhisperCppProvider(WhisperProvider):
                 "text": ""
             }
 
+        # 检查 ffmpeg 可用性
+        ffmpeg_ok, ffmpeg_msg = _check_ffmpeg()
+        if not ffmpeg_ok:
+            logger.error(f"ffmpeg not available: {ffmpeg_msg}")
+            if hasattr(self, 'fallback_provider'):
+                return await self.fallback_provider.transcribe(audio_data, language, mime_type)
+            return {
+                "success": False,
+                "error": f"ffmpeg 未安装。请先安装 ffmpeg:\n1. 运行: winget install ffmpeg\n2. 重启终端后重试",
+                "text": ""
+            }
+
         start_time = time.time()
 
         try:
-            import tempfile
             import subprocess
 
             # 音频预检查
@@ -518,36 +561,396 @@ class OpenAIWhisperProvider(WhisperProvider):
 
 
 class TencentASRProvider(WhisperProvider):
-    """腾讯云语音识别 Provider (预留)"""
-
-    def __init__(self, secret_id: str = "", secret_key: str = ""):
+    """腾讯云语音识别 Provider"""
+    
+    def __init__(self, secret_id: str = "", secret_key: str = "", app_id: str = ""):
         self.secret_id = secret_id
         self.secret_key = secret_key
-
+        self.app_id = app_id
+    
     async def transcribe(self, audio_data: bytes, language: str = "en", mime_type: str = "audio/webm") -> dict:
-        """腾讯云语音识别 - 需要配置密钥"""
-        return {
-            "success": False,
-            "error": "腾讯云语音识别需要配置 secret_id 和 secret_key",
-            "text": ""
-        }
+        """腾讯云语音识别"""
+        if not self.secret_id or not self.secret_key:
+            return {
+                "success": False,
+                "error": "腾讯云语音识别未配置 secret_id 或 secret_key，已自动降级到 Faster Whisper",
+                "text": ""
+            }
+        
+        if not audio_data:
+            return {"success": False, "error": "No audio data provided", "text": ""}
+        
+        try:
+            import httpx
+            import hashlib
+            import hmac
+            import time
+            import base64
+            
+            # 音频转 base64
+            audio_base64 = base64.b64encode(audio_data).decode("utf-8")
+            
+            # 腾讯云 ASR API
+            url = "https://asr.tencentcloudapi.com/"
+            
+            # 生成签名
+            timestamp = str(int(time.time()))
+            params = {
+                "Action": "CreateRecognitionTask",
+                "Version": "2022-08-11",
+                "Region": "ap-guangzhou",
+                "SecretId": self.secret_id,
+                "Timestamp": timestamp,
+                "Nonce": str(int(time.time() * 1000) % 100000),
+                "EngineType": "16k",
+                "Url": "",  # 使用 Data 参数
+                "Data": audio_base64[:50000],  # 限制大小
+                "DataLen": len(audio_base64[:50000]),
+                "ChannelNum": 1,
+                "SampleRate": 16000,
+                "WordBoost": []
+            }
+            
+            # 生成签名
+            def generate_signature(params, secret_key):
+                sorted_params = sorted(params.items())
+                param_str = "&".join([f"{k}={v}" for k, v in sorted_params])
+                signature = hmac.new(
+                    secret_key.encode("utf-8"),
+                    param_str.encode("utf-8"),
+                    hashlib.sha1
+                ).hexdigest()
+                return signature
+            
+            params["Signature"] = generate_signature(params, self.secret_key)
+            
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(url, data=params)
+                result = response.json()
+                
+                if "Response" in result and "TaskId" in result["Response"]:
+                    # 异步任务，需要轮询获取结果
+                    return {
+                        "success": True,
+                        "text": "腾讯云语音识别任务已提交，请稍后查询结果",
+                        "language": language
+                    }
+                elif "Response" in result and "Result" in result["Response"]:
+                    return {
+                        "success": True,
+                        "text": result["Response"]["Result"],
+                        "language": language
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "error": f"腾讯云 ASR 错误: {result}",
+                        "text": ""
+                    }
+        except Exception as e:
+            logger.error(f"Tencent ASR error: {e}")
+            return {"success": False, "error": f"腾讯云语音识别失败: {str(e)}", "text": ""}
+
+
+class VolcengineASRProvider(WhisperProvider):
+    """火山引擎语音识别 Provider (字节跳动)"""
+    
+    def __init__(self, app_id: str = "", secret_id: str = "", secret_key: str = ""):
+        self.app_id = app_id
+        self.secret_id = secret_id
+        self.secret_key = secret_key
+    
+    async def transcribe(self, audio_data: bytes, language: str = "en", mime_type: str = "audio/webm") -> dict:
+        """火山引擎语音识别"""
+        if not self.secret_id or not self.secret_key:
+            return {
+                "success": False,
+                "error": "火山引擎语音识别未配置 secret_id 或 secret_key，已自动降级到 Faster Whisper",
+                "text": ""
+            }
+        
+        if not audio_data:
+            return {"success": False, "error": "No audio data provided", "text": ""}
+        
+        try:
+            import httpx
+            import hashlib
+            import hmac
+            import time
+            import base64
+            
+            # 音频转 base64
+            audio_base64 = base64.b64encode(audio_data).decode("utf-8")
+            
+            # 火山引擎 ASR API (流式识别)
+            url = "https://openspeech.bytedance.com/api/v2/asr"
+            
+            timestamp = str(int(time.time()))
+            
+            # 生成 Authorization
+            signature_str = f"GET /api/v2/asr\n{timestamp}\n{self.app_id}"
+            signature = hmac.new(
+                self.secret_key.encode("utf-8"),
+                signature_str.encode("utf-8"),
+                hashlib.sha256
+            ).hexdigest()
+            
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer; {signature}",
+                "X-App-Id": self.app_id,
+                "X-Timestamp": timestamp
+            }
+            
+            body = {
+                "app": {"appid": self.app_id},
+                "user": {"uid": "lexiva_user"},
+                "audio": {
+                    "format": "wav",
+                    "rate": 16000,
+                    "bits": 16,
+                    "channel": 1,
+                    "codec": "raw"
+                },
+                "request": {
+                    "reqid": str(int(time.time() * 1000)),
+                    "sequence": 1
+                }
+            }
+            
+            # 由于火山引擎需要原始音频数据，这里使用简化实现
+            # 完整实现需要将音频数据以特定方式传递
+            return {
+                "success": False,
+                "error": "火山引擎 ASR 需要完整的音频上传实现，当前版本暂未完整支持",
+                "text": ""
+            }
+            
+        except Exception as e:
+            logger.error(f"Volcengine ASR error: {e}")
+            return {"success": False, "error": f"火山引擎语音识别失败: {str(e)}", "text": ""}
+
+
+class AliyunASRProvider(WhisperProvider):
+    """阿里云语音识别 Provider"""
+    
+    def __init__(self, access_key_id: str = "", access_key_secret: str = ""):
+        self.access_key_id = access_key_id
+        self.access_key_secret = access_key_secret
+        self._token = None
+    
+    async def _get_token(self) -> str:
+        """获取阿里云访问 Token"""
+        import httpx
+        import time
+        import hashlib
+        import base64
+        import urllib.parse
+        
+        if self._token:
+            return self._token
+        
+        try:
+            # 阿里云 STS 获取 token 的简化实现
+            # 实际需要通过阿里云 STS 服务获取
+            url = "https://nls-meta.cn-shanghai.aliyuncs.com/"
+            return ""
+        except Exception as e:
+            logger.error(f"Aliyun token error: {e}")
+            return ""
+    
+    async def transcribe(self, audio_data: bytes, language: str = "en", mime_type: str = "audio/webm") -> dict:
+        """阿里云语音识别"""
+        if not self.access_key_id or not self.access_key_secret:
+            return {
+                "success": False,
+                "error": "阿里云语音识别未配置 access_key_id 或 access_key_secret，已自动降级到 Faster Whisper",
+                "text": ""
+            }
+        
+        if not audio_data:
+            return {"success": False, "error": "No audio data provided", "text": ""}
+        
+        try:
+            import httpx
+            import base64
+            
+            # 音频转 base64
+            audio_base64 = base64.b64encode(audio_data).decode("utf-8")
+            
+            # 阿里云 ASR API (录音文件识别)
+            url = "https://nls-gateway-cn-shanghai.aliyuncs.com/stream/v1/asr"
+            
+            # 注意：需要先获取 token
+            token = await self._get_token()
+            if not token:
+                return {
+                    "success": False,
+                    "error": "阿里云 Token 获取失败，请在阿里云控制台获取 Access Token",
+                    "text": ""
+                }
+            
+            params = {
+                "appkey": "LTAI5t",  # 需要在阿里云控制台获取
+                "token": token,
+                "format": "wav",
+                "sample_rate": 16000,
+                "enable_inverse_text_normalization": "true",
+                "enable_voice_detection": "true"
+            }
+            
+            headers = {
+                "Content-Type": "application/x-www-form-urlencoded"
+            }
+            
+            # 将音频数据放入请求体
+            import urllib.parse
+            body = urllib.parse.urlencode({"audio": audio_base64, **params})
+            
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(url, data=body, headers=headers)
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    if "result" in result:
+                        return {
+                            "success": True,
+                            "text": result["result"],
+                            "language": language
+                        }
+                    return {
+                        "success": True,
+                        "text": result.get("data", {}).get("text", ""),
+                        "language": language
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "error": f"阿里云 ASR error: {response.status_code}",
+                        "text": ""
+                    }
+                    
+        except Exception as e:
+            logger.error(f"Aliyun ASR error: {e}")
+            return {"success": False, "error": f"阿里云语音识别失败: {str(e)}", "text": ""}
+
+
+class XfyunASRProvider(WhisperProvider):
+    """讯飞语音识别 Provider"""
+    
+    def __init__(self, app_id: str = "", api_key: str = "", api_secret: str = ""):
+        self.app_id = app_id
+        self.api_key = api_key
+        self.api_secret = api_secret
+    
+    async def transcribe(self, audio_data: bytes, language: str = "en", mime_type: str = "audio/webm") -> dict:
+        """讯飞语音识别"""
+        if not self.api_key or not self.api_secret:
+            return {
+                "success": False,
+                "error": "讯飞语音识别未配置 api_key 或 api_secret，已自动降级到 Faster Whisper",
+                "text": ""
+            }
+        
+        if not audio_data:
+            return {"success": False, "error": "No audio data provided", "text": ""}
+        
+        try:
+            import httpx
+            import hashlib
+            import hmac
+            import base64
+            import time
+            import json
+            from urllib.parse import urlencode
+            
+            # 讯飞 WebSocket API 需要鉴权，这里简化为 REST API
+            # 讯飞语音识别 REST API
+            url = "https://iat.xfyun.cn/v2/iat"
+            
+            # 构建鉴权参数
+            now = time.time()
+            date = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime(now))
+            
+            # 生成 Authorization
+            signature_origin = f"host: iat.xfyun.cn\ndate: {date}\nGET /v2/iat HTTP/1.1"
+            signature_sha = hmac.new(
+                self.api_secret.encode("utf-8"),
+                signature_origin.encode("utf-8"),
+                digestmod=hashlib.sha256
+            ).digest()
+            authorization = base64.b64encode(signature_sha).decode("utf-8")
+            
+            headers = {
+                "Authorization": f'api_key="{self.api_key}", algorithm="hmac-sha256", headers="host date request-line", signature="{authorization}"',
+                "Date": date,
+                "Host": "iat.xfyun.cn"
+            }
+            
+            # 音频转 base64
+            audio_base64 = base64.b64encode(audio_data).decode("utf-8")
+            
+            # 构建请求体
+            common = {"app_id": self.app_id}
+            business = {
+                "language": "en_us" if language.lower() == "en" else "zh_cn",
+                "domain": "iat",
+                "accent": "mandarin",
+                "sample_rate": 16000,
+                "format": "wav",
+                "encoding": "raw"
+            }
+            data = {"status": 2, "format": "audio/wav", "audio": audio_base64}
+            
+            body = json.dumps({"common": common, "business": business, "data": data})
+            
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(url, content=body, headers=headers)
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    if result.get("code") == 0:
+                        return {
+                            "success": True,
+                            "text": result.get("data", {}).get("result", {}).get("ws", [{"cw": [{"w": ""}]}])[0].get("cw", [{}])[0].get("w", ""),
+                            "language": language
+                        }
+                    else:
+                        return {
+                            "success": False,
+                            "error": f"讯飞 ASR 错误: {result.get('message', '未知错误')}",
+                            "text": ""
+                        }
+                else:
+                    return {
+                        "success": False,
+                        "error": f"讯飞 ASR HTTP error: {response.status_code}",
+                        "text": ""
+                    }
+                    
+        except Exception as e:
+            logger.error(f"Xfyun ASR error: {e}")
+            return {"success": False, "error": f"讯飞语音识别失败: {str(e)}", "text": ""}
 
 
 class WhisperService:
     """Whisper 服务入口 - 支持配置"""
-
+    
     # 可用 provider 映射
     PROVIDERS = {
         "faster-whisper": FasterWhisperProvider,
         "whisper-cpp": WhisperCppProvider,
         "openai": OpenAIWhisperProvider,
         "tencent": TencentASRProvider,
+        "volcengine": VolcengineASRProvider,
+        "aliyun": AliyunASRProvider,
+        "xfyun": XfyunASRProvider,
     }
-
+    
     def __init__(self):
         self._settings = None
         self._provider = None
-
+    
     def _get_settings(self) -> dict:
         """从数据库获取 Whisper 配置"""
         if self._settings is None:
@@ -557,46 +960,85 @@ class WhisperService:
                 session = next(get_db())
                 settings = session.query(AISettings).first()
                 if settings:
+                    # 检查各云 ASR 是否配置了密钥，未配置则自动降级
+                    provider = settings.whisper_provider or "faster-whisper"
+                    
                     self._settings = {
-                        "provider": settings.whisper_provider or "whisper-cpp",
+                        "provider": provider,
                         "model": settings.whisper_model or "base",
                         "api_key": settings.api_key or "",
+                        # 火山引擎
+                        "volcengine_asr_app_id": settings.volcengine_asr_app_id or "",
+                        "volcengine_asr_secret_id": settings.volcengine_asr_secret_id or "",
+                        "volcengine_asr_secret_key": settings.volcengine_asr_secret_key or "",
+                        # 阿里云
+                        "aliyun_asr_access_key_id": settings.aliyun_asr_access_key_id or "",
+                        "aliyun_asr_access_key_secret": settings.aliyun_asr_access_key_secret or "",
+                        # 讯飞
+                        "xfyun_app_id": settings.xfyun_app_id or "",
+                        "xfyun_api_key": settings.xfyun_api_key or "",
+                        "xfyun_api_secret": settings.xfyun_api_secret or "",
+                        # 腾讯云
+                        "tencent_secret_id": settings.tencent_secret_id or "",
+                        "tencent_secret_key": settings.tencent_secret_key or "",
+                        "tencent_app_id": settings.tencent_app_id or "",
                     }
                 session.close()
             except Exception as e:
                 logger.warning(f"Failed to load Whisper settings: {e}")
-                self._settings = {"provider": "whisper-cpp", "model": "base", "api_key": ""}
-
+                self._settings = {"provider": "faster-whisper", "model": "base", "api_key": ""}
+        
         return self._settings
-
+    
     def reload_settings(self):
         """重新加载配置"""
         self._settings = None
         self._provider = None
-
+    
     def _get_provider(self) -> WhisperProvider:
         """获取当前配置的 provider"""
         if self._provider is not None:
             return self._provider
-
+        
         settings = self._get_settings()
         provider_name = settings.get("provider", "faster-whisper")
         model_size = settings.get("model", "base")
-
+        
         provider_class = self.PROVIDERS.get(provider_name, FasterWhisperProvider)
-
-        # 创建 provider 实例
+        
+        # 根据不同厂商创建 provider 实例
         if provider_name == "openai":
             self._provider = provider_class(
                 api_key=settings.get("api_key", ""),
                 model="whisper-1"
             )
         elif provider_name == "tencent":
-            self._provider = provider_class()
+            self._provider = provider_class(
+                secret_id=settings.get("tencent_secret_id", ""),
+                secret_key=settings.get("tencent_secret_key", ""),
+                app_id=settings.get("tencent_app_id", "")
+            )
+        elif provider_name == "volcengine":
+            self._provider = provider_class(
+                app_id=settings.get("volcengine_asr_app_id", ""),
+                secret_id=settings.get("volcengine_asr_secret_id", ""),
+                secret_key=settings.get("volcengine_asr_secret_key", "")
+            )
+        elif provider_name == "aliyun":
+            self._provider = provider_class(
+                access_key_id=settings.get("aliyun_asr_access_key_id", ""),
+                access_key_secret=settings.get("aliyun_asr_access_key_secret", "")
+            )
+        elif provider_name == "xfyun":
+            self._provider = provider_class(
+                app_id=settings.get("xfyun_app_id", ""),
+                api_key=settings.get("xfyun_api_key", ""),
+                api_secret=settings.get("xfyun_api_secret", "")
+            )
         else:
-            # faster-whisper
+            # faster-whisper / whisper-cpp
             self._provider = provider_class(model_size=model_size)
-
+        
         return self._provider
 
     async def transcribe(self, audio_data: bytes, language: str = "en", mime_type: str = "audio/webm") -> dict:

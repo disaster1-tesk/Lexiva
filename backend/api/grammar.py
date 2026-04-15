@@ -745,6 +745,105 @@ class GrammarGenerateRequest(BaseModel):
     count: int = 1
 
 
+def _repair_truncated_json(text: str) -> str | None:
+    """智能修复被截断的JSON响应"""
+    import re
+    
+    text = text.strip()
+    if not text:
+        return None
+    
+    # 检查是否是被截断的JSON数组
+    if not text.startswith('['):
+        return None
+    
+    # 统计括号平衡
+    bracket_count = 0
+    brace_count = 0
+    
+    for char in text:
+        if char == '[':
+            bracket_count += 1
+        elif char == ']':
+            bracket_count -= 1
+        elif char == '{':
+            brace_count += 1
+        elif char == '}':
+            brace_count -= 1
+    
+    # 如果数组没有正确闭合，尝试修复
+    if bracket_count > 0:
+        # 找到最后一个完整的对象并闭合数组
+        # 策略：移除末尾不完整的部分，添加闭合括号
+        
+        # 尝试找到最后一个完整的练习对象
+        # 从字符串末尾向前查找，直到找到平衡的 }
+        end_pos = len(text)
+        brace_balance = 0
+        
+        for i in range(len(text) - 1, -1, -1):
+            char = text[i]
+            if char == '}':
+                brace_balance += 1
+            elif char == '{':
+                brace_balance -= 1
+            
+            if brace_balance == 0 and i < len(text) - 1:
+                # 找到一个完整对象的结尾
+                # 检查这个位置附近是否是完整的语法点
+                end_pos = i + 1
+                break
+        
+        # 裁剪到最后一个完整对象
+        repaired = text[:end_pos]
+        
+        # 确保数组被正确闭合
+        repaired = repaired.rstrip(',').rstrip(' ')
+        if not repaired.endswith(']'):
+            repaired += ']'
+        
+        # 验证修复后的JSON是否有效
+        try:
+            json.loads(repaired)
+            return repaired
+        except json.JSONDecodeError:
+            pass
+    
+    # 备选策略：尝试移除可能不完整的最后一个对象
+    if brace_count > 0:
+        # 移除末尾不完整的部分（从 "exercises" 截断处开始）
+        # 查找最后一个完整的 name 字段位置
+        last_name_match = list(re.finditer(r'"name":\s*"[^"]+"', text))
+        if last_name_match:
+            last_name = last_name_match[-1]
+            # 找到这个 name 所属对象的结束位置
+            # 从该位置向后找到对应的 }
+            start_search = last_name.end()
+            brace_check = 0
+            end_idx = start_search
+            
+            for i in range(start_search, len(text)):
+                if text[i] == '{':
+                    brace_check += 1
+                elif text[i] == '}':
+                    brace_check -= 1
+                if brace_check == 0:
+                    end_idx = i + 1
+                    break
+            
+            repaired = text[:end_idx].rstrip(',').rstrip(' ')
+            if not repaired.endswith(']'):
+                repaired += ']'
+            
+            try:
+                json.loads(repaired)
+                return repaired
+            except:
+                pass
+    
+    return None
+
+
 @router.post("/generate")
 async def generate_grammar(request: GrammarGenerateRequest):
     """
@@ -758,57 +857,156 @@ async def generate_grammar(request: GrammarGenerateRequest):
 
     prompt = f"""请生成{request.count}个关于"{request.category}"的英语语法点。
 
-你必须严格遵循以下JSON格式返回数据，不要有任何额外内容：
+请严格按以下JSON格式返回（务必精简，每个语法点只包含核心字段）：
 
 [
-  {{"name": "虚拟语气", "description": "用来表达假设、愿望、建议等非真实情况", "formula": "If + 过去式, 主语 + would/could/might + 动词原形", "examples": ["If I were you, I would take the job.", "If she had money, she would travel the world."], "exercises": [{{"type": "choice", "question": "If he ___ richer, he would buy a new car.", "answer": "were", "options": ["is", "was", "were", "be"]}}]}}
+  {{"name": "语法点名称", "description": "一句话描述", "formula": "公式", "examples": ["例句1"], "exercises": [{{"type": "choice", "question": "题目", "answer": "答案", "options": ["A", "B", "C", "D"]}}]}}
 ]
 
-关键要求：
-1. 只返回这一行JSON数组，不要有任何前缀文字
-2. 不要使用```json或```包裹
-3. 每个语法点必须包含：name(名称)、description(讲解)、formula(公式)、examples(例句数组)、exercises(练习数组)
-4. exercises中每道题包含：type(类型choice/fill_blank/rewrite)、question(题目)、answer(答案)、options(仅choice类型需要)
-5. 返回{request.count}个不同的语法点"""
+要求：
+1. 只返回JSON数组，不要任何前缀后缀
+2. 每个语法点的exercises只需1道题
+3. examples只需1个例句
+4. description最短只写一句话
+5. 必须确保JSON完整可解析"""
 
     try:
         result = await chat_service.chat(prompt, scene="exam")
         reply = result.get("reply", "")
 
+        # 记录原始回复以便调试
+        logger.info(f"AI response (first 500 chars): {reply[:500]}")
+
         # 清理回复内容，移除可能的markdown标记
         reply = reply.strip()
-        reply = reply.replace('```json', '').replace('```', '').replace('```markdown', '')
+        reply = reply.replace('```json', '').replace('```', '').replace('```markdown', '').replace('```xml', '')
 
         # 解析JSON - 尝试多种方式
         topics = []
-        
+        parse_errors = []
+
         # 方法1: 尝试直接解析
         try:
             topics = json.loads(reply)
-        except json.JSONDecodeError:
-            pass
-        
+            logger.info("Method 1 succeeded: direct parse")
+        except json.JSONDecodeError as e:
+            parse_errors.append(f"Method 1 failed: {e}")
+
         # 方法2: 尝试正则提取JSON数组
         if not topics:
-            match = re.search(r'\[.*\]', reply, re.DOTALL)
-            if match:
-                try:
+            try:
+                match = re.search(r'\[.*\]', reply, re.DOTALL)
+                if match:
                     topics = json.loads(match.group())
-                except json.JSONDecodeError:
-                    pass
+                    logger.info("Method 2 succeeded: regex extract array")
+            except (json.JSONDecodeError, AttributeError) as e:
+                parse_errors.append(f"Method 2 failed: {e}")
 
+        # 方法3: 尝试正则提取JSON对象，然后组合成数组
         if not topics:
-            logger.warning(f"Failed to parse AI response as JSON: {reply[:200]}")
-            raise HTTPException(status_code=500, detail="AI返回的数据格式不正确，请重试")
+            try:
+                obj_matches = re.findall(r'\{[^{}]*"name"[^{}]*\}', reply)
+                if obj_matches:
+                    topics = []
+                    for obj_str in obj_matches:
+                        try:
+                            obj = json.loads(obj_str)
+                            if "name" in obj:
+                                topics.append(obj)
+                        except:
+                            pass
+                    if topics:
+                        logger.info(f"Method 3 succeeded: found {len(topics)} objects")
+            except Exception as e:
+                parse_errors.append(f"Method 3 failed: {e}")
 
-        logger.info(f"Generated {len(topics)} grammar topics")
+        # 方法4: 尝试查找被包裹在各种标签中的JSON
+        if not topics:
+            try:
+                # 尝试提取 <response> 或其他标签中的内容
+                patterns = [
+                    r'<response>(.*?)</response>',
+                    r'<result>(.*?)</result>',
+                    r'\{.*?"name".*?"description".*?\}(?:,\s*\{.*?\})*'
+                ]
+                for pattern in patterns:
+                    match = re.search(pattern, reply, re.DOTALL)
+                    if match:
+                        try:
+                            topics = json.loads(match.group())
+                            if topics:
+                                logger.info(f"Method 4 succeeded: pattern {pattern}")
+                                break
+                        except:
+                            continue
+            except Exception as e:
+                parse_errors.append(f"Method 4 failed: {e}")
+
+        # 方法5: 尝试逐行解析，查找有效的JSON对象
+        if not topics:
+            try:
+                lines = reply.split('\n')
+                for line in lines:
+                    line = line.strip()
+                    if line.startswith('{') and line.endswith('}'):
+                        try:
+                            obj = json.loads(line)
+                            if "name" in obj and "description" in obj:
+                                topics.append(obj)
+                        except:
+                            continue
+                if topics:
+                    logger.info(f"Method 5 succeeded: found {len(topics)} objects from lines")
+            except Exception as e:
+                parse_errors.append(f"Method 5 failed: {e}")
+
+        # 方法6: 智能修复截断的JSON（关键新增）
+        if not topics:
+            try:
+                repaired = _repair_truncated_json(reply)
+                if repaired:
+                    topics = json.loads(repaired)
+                    if topics:
+                        logger.info(f"Method 6 succeeded: repaired truncated JSON")
+            except Exception as e:
+                parse_errors.append(f"Method 6 failed: {e}")
+
+        # 如果所有方法都失败了，记录错误并提供更友好的错误信息
+        if not topics:
+            logger.error(f"All parsing methods failed. Errors: {'; '.join(parse_errors)}")
+            logger.error(f"Original reply: {reply[:1000]}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"AI返回的数据格式无法解析，已记录日志。请尝试简化查询或稍后重试。"
+            )
+
+        # 验证返回数据的格式
+        valid_topics = []
+        for t in topics:
+            if isinstance(t, dict) and "name" in t:
+                valid_topics.append({
+                    "name": t.get("name", ""),
+                    "description": t.get("description", ""),
+                    "formula": t.get("formula", ""),
+                    "examples": t.get("examples", []),
+                    "exercises": t.get("exercises", [])
+                })
+
+        if not valid_topics:
+            logger.error(f"No valid topics found after validation. Topics: {topics}")
+            raise HTTPException(status_code=500, detail="AI返回的语法点数据格式不完整，请重试")
+
+        logger.info(f"Generated {len(valid_topics)} grammar topics")
 
         return {
             "code": 0,
             "data": {
-                "topics": topics
+                "topics": valid_topics
             }
         }
+    except HTTPException:
+        # 重新抛出HTTPException，不做额外处理
+        raise
     except Exception as e:
         logger.error(f"Generate grammar error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"生成语法失败: {str(e)}")

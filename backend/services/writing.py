@@ -81,6 +81,14 @@ class WritingService:
             return settings.base_url
         return self.PROVIDERS[settings.provider]["base_url"]
     
+    def _is_local_url(self, url: str) -> bool:
+        """检测 URL 是否为本地地址"""
+        if not url:
+            return False
+        local_patterns = ["localhost", "127.0.0.1", "0.0.0.0", "[::1]"]
+        url_lower = url.lower()
+        return any(pattern in url_lower for pattern in local_patterns)
+    
     async def correct(self, text: str, exam_type: str = "general") -> dict:
         """
         Correct and improve writing
@@ -103,7 +111,18 @@ class WritingService:
         api_key = self._get_api_key(settings)
         base_url = self._get_base_url(settings)
         
-        if not api_key:
+        # Ollama 本地模型（localhost/127.0.0.1）不需要 API Key
+        is_local_ollama = settings.provider == "ollama" and self._is_local_url(base_url)
+        if not api_key and not is_local_ollama:
+            if settings.provider == "ollama":
+                logger.warning("Ollama remote API requires API Key")
+                return {
+                    "original_text": text,
+                    "corrected_text": text,
+                    "corrections": [],
+                    "score": {"grammar": 0, "vocabulary": 0, "fluency": 0, "overall": 0},
+                    "error": "Ollama 远程 API 需要配置 API Key，请前往设置页面配置。"
+                }
             logger.warning("API Key not configured")
             return {
                 "original_text": text,

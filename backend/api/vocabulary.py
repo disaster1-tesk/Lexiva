@@ -44,6 +44,10 @@ class PhoneticCheckRequest(BaseModel):
     audio: str
 
 
+class BatchAddWordsRequest(BaseModel):
+    words: List[dict]  # [{"word": "...", "phonetic": "...", "meaning": "...", "type": "..."}]
+
+
 @router.get("/list")
 async def get_words():
     """
@@ -453,3 +457,76 @@ async def check_phonetic(request: PhoneticCheckRequest):
             "target": target
         }
     }
+
+
+@router.post("/batch-add")
+async def batch_add_words(request: BatchAddWordsRequest):
+    """
+    批量添加单词到单词本
+    """
+    logger.info(f"Batch add words: count={len(request.words)}")
+
+    if not request.words:
+        raise HTTPException(status_code=400, detail="单词列表不能为空")
+
+    session = next(get_db())
+    added_count = 0
+    skipped_count = 0
+    results = []
+
+    try:
+        for word_data in request.words:
+            word_text = word_data.get("word", "").strip().lower()
+            if not word_text:
+                skipped_count += 1
+                continue
+
+            # 检查是否已存在
+            existing = session.query(Word).filter(Word.word == word_text).first()
+            if existing:
+                skipped_count += 1
+                results.append({
+                    "word": word_text,
+                    "status": "skipped",
+                    "message": "已存在"
+                })
+                continue
+
+            # 创建新单词
+            word = Word(
+                word=word_text,
+                phonetic=word_data.get("phonetic", f"/{word_text}/"),
+                meaning=word_data.get("meaning", ""),
+                example_sentences=[],
+                memory_strength=1.0,
+                next_review=datetime.now() + timedelta(days=1)
+            )
+            session.add(word)
+            added_count += 1
+            results.append({
+                "word": word_text,
+                "status": "added"
+            })
+
+        session.commit()
+
+        logger.info(f"Batch add completed: added={added_count}, skipped={skipped_count}")
+
+        return {
+            "code": 0,
+            "message": f"成功添加 {added_count} 个单词，跳过 {skipped_count} 个",
+            "data": {
+                "added": added_count,
+                "skipped": skipped_count,
+                "results": results
+            }
+        }
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Batch add words error: {e}")
+        raise HTTPException(status_code=500, detail=f"批量添加失败: {str(e)}")
+    finally:
+        try:
+            session.close()
+        except Exception:
+            pass

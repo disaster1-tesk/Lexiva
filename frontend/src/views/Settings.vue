@@ -73,6 +73,10 @@
             <span v-if="form.provider === 'deepseek'">DeepSeek: 在 deepseek.com 获取</span>
             <span v-else-if="form.provider === 'openai'">OpenAI: 在 platform.openai.com 获取</span>
             <span v-else-if="form.provider === 'ollama'">Ollama: 本地部署，无需 API Key</span>
+            <span v-else-if="form.provider === 'qwen'">通义千问: 在 dashscope.console.aliyun.com 获取</span>
+            <span v-else-if="form.provider === 'zhipu'">智谱清言: 在 bigmodel.cn 获取</span>
+            <span v-else-if="form.provider === 'anthropic'">Claude: 在 console.anthropic.com 获取</span>
+            <span v-else-if="form.provider === 'google'">Gemini: 在 aistudio.google.com/app/apikey 获取</span>
           </div>
         </el-form-item>
         
@@ -179,6 +183,78 @@
           </el-form-item>
         </template>
         
+        <!-- 火山引擎 TTS 配置 -->
+        <template v-if="form.tts_provider === 'volcengine'">
+          <el-form-item label="App ID">
+            <el-input 
+              v-model="form.volcengine_app_id" 
+              placeholder="火山引擎 AppId"
+            ></el-input>
+          </el-form-item>
+          <el-form-item label="Secret ID">
+            <el-input 
+              v-model="form.volcengine_secret_id" 
+              type="password" 
+              show-password
+              placeholder="火山引擎 SecretId"
+            ></el-input>
+          </el-form-item>
+          <el-form-item label="Secret Key">
+            <el-input 
+              v-model="form.volcengine_secret_key" 
+              type="password" 
+              show-password
+              placeholder="火山引擎 SecretKey"
+            ></el-input>
+          </el-form-item>
+        </template>
+        
+        <!-- 阿里云 TTS 配置 -->
+        <template v-if="form.tts_provider === 'aliyun'">
+          <el-form-item label="Access Key ID">
+            <el-input 
+              v-model="form.aliyun_access_key_id" 
+              type="password" 
+              show-password
+              placeholder="阿里云 AccessKeyId"
+            ></el-input>
+          </el-form-item>
+          <el-form-item label="Access Key Secret">
+            <el-input 
+              v-model="form.aliyun_access_key_secret" 
+              type="password" 
+              show-password
+              placeholder="阿里云 AccessKeySecret"
+            ></el-input>
+          </el-form-item>
+        </template>
+        
+        <!-- 百度语音 TTS 配置 -->
+        <template v-if="form.tts_provider === 'baidu'">
+          <el-form-item label="App ID">
+            <el-input 
+              v-model="form.baidu_app_id" 
+              placeholder="百度语音 AppId"
+            ></el-input>
+          </el-form-item>
+          <el-form-item label="API Key">
+            <el-input 
+              v-model="form.baidu_api_key" 
+              type="password" 
+              show-password
+              placeholder="百度语音 API Key"
+            ></el-input>
+          </el-form-item>
+          <el-form-item label="Secret Key">
+            <el-input 
+              v-model="form.baidu_secret_key" 
+              type="password" 
+              show-password
+              placeholder="百度语音 Secret Key"
+            ></el-input>
+          </el-form-item>
+        </template>
+        
         <el-form-item label="语音选择">
           <el-select v-model="form.tts_model" placeholder="选择语音">
             <el-option v-for="v in ttsVoices" :key="v.id" :label="v.name" :value="v.id">
@@ -223,6 +299,98 @@
             </el-option>
           </el-select>
         </el-form-item>
+        
+        <!-- 腾讯云 ASR 密钥配置 -->
+        <template v-if="form.whisper_provider === 'tencent'">
+          <el-form-item label="Secret ID">
+            <el-input 
+              v-model="form.tencent_secret_id" 
+              type="password" 
+              show-password
+              placeholder="腾讯云 SecretId"
+            ></el-input>
+          </el-form-item>
+          <el-form-item label="Secret Key">
+            <el-input 
+              v-model="form.tencent_secret_key" 
+              type="password" 
+              show-password
+              placeholder="腾讯云 SecretKey"
+            ></el-input>
+          </el-form-item>
+        </template>
+        
+        <!-- 火山引擎 ASR 配置 -->
+        <template v-if="form.whisper_provider === 'volcengine'">
+          <el-form-item label="App ID">
+            <el-input 
+              v-model="form.volcengine_asr_app_id" 
+              placeholder="火山引擎 AppId"
+            ></el-input>
+          </el-form-item>
+          <el-form-item label="Secret ID">
+            <el-input 
+              v-model="form.volcengine_asr_secret_id" 
+              type="password" 
+              show-password
+              placeholder="火山引擎 SecretId"
+            ></el-input>
+          </el-form-item>
+          <el-form-item label="Secret Key">
+            <el-input 
+              v-model="form.volcengine_asr_secret_key" 
+              type="password" 
+              show-password
+              placeholder="火山引擎 SecretKey"
+            ></el-input>
+          </el-form-item>
+        </template>
+        
+        <!-- 阿里云 ASR 配置 -->
+        <template v-if="form.whisper_provider === 'aliyun'">
+          <el-form-item label="Access Key ID">
+            <el-input 
+              v-model="form.aliyun_asr_access_key_id" 
+              type="password" 
+              show-password
+              placeholder="阿里云 AccessKeyId"
+            ></el-input>
+          </el-form-item>
+          <el-form-item label="Access Key Secret">
+            <el-input 
+              v-model="form.aliyun_asr_access_key_secret" 
+              type="password" 
+              show-password
+              placeholder="阿里云 AccessKeySecret"
+            ></el-input>
+          </el-form-item>
+        </template>
+        
+        <!-- 讯飞语音 ASR 配置 -->
+        <template v-if="form.whisper_provider === 'xfyun'">
+          <el-form-item label="App ID">
+            <el-input 
+              v-model="form.xfyun_app_id" 
+              placeholder="讯飞 AppId"
+            ></el-input>
+          </el-form-item>
+          <el-form-item label="API Key">
+            <el-input 
+              v-model="form.xfyun_api_key" 
+              type="password" 
+              show-password
+              placeholder="讯飞 API Key"
+            ></el-input>
+          </el-form-item>
+          <el-form-item label="API Secret">
+            <el-input 
+              v-model="form.xfyun_api_secret" 
+              type="password" 
+              show-password
+              placeholder="讯飞 API Secret"
+            ></el-input>
+          </el-form-item>
+        </template>
         
         <el-form-item>
           <el-button type="primary" @click="saveSettings" :loading="saving">保存配置</el-button>
@@ -277,7 +445,21 @@ function getProviderName(providerId: string): string {
   const map: Record<string, string> = {
     deepseek: 'DeepSeek',
     openai: 'OpenAI',
-    ollama: 'Ollama (本地)'
+    ollama: 'Ollama (本地)',
+    qwen: '通义千问 (阿里云)',
+    zhipu: '智谱清言 (ChatGLM)',
+    anthropic: 'Claude (Anthropic)',
+    google: 'Gemini (Google)',
+    edge: 'Edge TTS',
+    tencent: '腾讯云 TTS',
+    volcengine: '火山引擎 TTS',
+    aliyun: '阿里云 TTS',
+    baidu: '百度语音 TTS',
+    'faster-whisper': 'Faster Whisper',
+    'whisper-cpp': 'Whisper.cpp',
+    volcengine: '火山引擎语音识别',
+    aliyun: '阿里云语音识别',
+    xfyun: '讯飞语音识别'
   }
   return map[providerId] || providerId
 }
@@ -297,9 +479,31 @@ const form = reactive({
   tencent_secret_id: '',
   tencent_secret_key: '',
   tencent_app_id: '',
+  // 火山引擎 TTS 配置
+  volcengine_app_id: '',
+  volcengine_secret_id: '',
+  volcengine_secret_key: '',
+  // 阿里云 TTS 配置
+  aliyun_access_key_id: '',
+  aliyun_access_key_secret: '',
+  // 百度语音 TTS 配置
+  baidu_app_id: '',
+  baidu_api_key: '',
+  baidu_secret_key: '',
   // Whisper 配置
   whisper_provider: 'faster-whisper',
-  whisper_model: 'base'
+  whisper_model: 'base',
+  // 火山引擎 ASR 配置
+  volcengine_asr_app_id: '',
+  volcengine_asr_secret_id: '',
+  volcengine_asr_secret_key: '',
+  // 阿里云 ASR 配置
+  aliyun_asr_access_key_id: '',
+  aliyun_asr_access_key_secret: '',
+  // 讯飞语音 ASR 配置
+  xfyun_app_id: '',
+  xfyun_api_key: '',
+  xfyun_api_secret: ''
 })
 
 const rules: FormRules = {
@@ -385,10 +589,32 @@ async function loadSettings() {
     form.tencent_secret_id = res.tencent_secret_id || ''
     form.tencent_secret_key = res.tencent_secret_key || ''
     form.tencent_app_id = res.tencent_app_id || ''
+    // 火山引擎 TTS 配置
+    form.volcengine_app_id = res.volcengine_app_id || ''
+    form.volcengine_secret_id = res.volcengine_secret_id || ''
+    form.volcengine_secret_key = res.volcengine_secret_key || ''
+    // 阿里云 TTS 配置
+    form.aliyun_access_key_id = res.aliyun_access_key_id || ''
+    form.aliyun_access_key_secret = res.aliyun_access_key_secret || ''
+    // 百度语音 TTS 配置
+    form.baidu_app_id = res.baidu_app_id || ''
+    form.baidu_api_key = res.baidu_api_key || ''
+    form.baidu_secret_key = res.baidu_secret_key || ''
     
     // Whisper 配置
     form.whisper_provider = res.whisper_provider || 'faster-whisper'
     form.whisper_model = res.whisper_model || 'base'
+    // 火山引擎 ASR 配置
+    form.volcengine_asr_app_id = res.volcengine_asr_app_id || ''
+    form.volcengine_asr_secret_id = res.volcengine_asr_secret_id || ''
+    form.volcengine_asr_secret_key = res.volcengine_asr_secret_key || ''
+    // 阿里云 ASR 配置
+    form.aliyun_asr_access_key_id = res.aliyun_asr_access_key_id || ''
+    form.aliyun_asr_access_key_secret = res.aliyun_asr_access_key_secret || ''
+    // 讯飞语音 ASR 配置
+    form.xfyun_app_id = res.xfyun_app_id || ''
+    form.xfyun_api_key = res.xfyun_api_key || ''
+    form.xfyun_api_secret = res.xfyun_api_secret || ''
     
     // 保存当前配置用于展示
     currentConfig.value = {
@@ -410,13 +636,16 @@ async function loadSettings() {
 async function onProviderChange(provider: string) {
   await loadModels(provider)
   // Set default model
-  if (provider === 'deepseek') {
-    form.model = 'deepseek-chat'
-  } else if (provider === 'openai') {
-    form.model = 'gpt-4o-mini'
-  } else if (provider === 'ollama') {
-    form.model = 'llama3'
+  const defaultModels: Record<string, string> = {
+    deepseek: 'deepseek-chat',
+    openai: 'gpt-4o-mini',
+    ollama: 'llama3',
+    qwen: 'qwen-turbo',
+    zhipu: 'glm-4-flash',
+    anthropic: 'claude-3-5-sonnet-20241022',
+    google: 'gemini-1.5-flash'
   }
+  form.model = defaultModels[provider] || 'deepseek-chat'
 }
 
 // Save settings
@@ -439,8 +668,30 @@ async function saveSettings() {
       tencent_secret_id: form.tencent_secret_id,
       tencent_secret_key: form.tencent_secret_key,
       tencent_app_id: form.tencent_app_id,
+      // 火山引擎 TTS 配置
+      volcengine_app_id: form.volcengine_app_id,
+      volcengine_secret_id: form.volcengine_secret_id,
+      volcengine_secret_key: form.volcengine_secret_key,
+      // 阿里云 TTS 配置
+      aliyun_access_key_id: form.aliyun_access_key_id,
+      aliyun_access_key_secret: form.aliyun_access_key_secret,
+      // 百度语音 TTS 配置
+      baidu_app_id: form.baidu_app_id,
+      baidu_api_key: form.baidu_api_key,
+      baidu_secret_key: form.baidu_secret_key,
       whisper_provider: form.whisper_provider,
-      whisper_model: form.whisper_model
+      whisper_model: form.whisper_model,
+      // 火山引擎 ASR 配置
+      volcengine_asr_app_id: form.volcengine_asr_app_id,
+      volcengine_asr_secret_id: form.volcengine_asr_secret_id,
+      volcengine_asr_secret_key: form.volcengine_asr_secret_key,
+      // 阿里云 ASR 配置
+      aliyun_asr_access_key_id: form.aliyun_asr_access_key_id,
+      aliyun_asr_access_key_secret: form.aliyun_asr_access_key_secret,
+      // 讯飞语音 ASR 配置
+      xfyun_app_id: form.xfyun_app_id,
+      xfyun_api_key: form.xfyun_api_key,
+      xfyun_api_secret: form.xfyun_api_secret
     })
     ElMessage.success('配置保存成功')
   } catch (e: any) {

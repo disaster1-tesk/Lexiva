@@ -108,8 +108,8 @@ cd lexiva
 cp backend/.env.example backend/.env
 # 编辑 backend/.env 填入您的 API Keys
 
-# 3. 使用启动脚本
-./run.sh docker
+# 3. 使用启动脚本（Windows/Mac/Linux 通用）
+python run.py docker
 ```
 
 ### 手动启动
@@ -136,22 +136,33 @@ docker-compose down
 - Python 3.10+
 - Node.js 18+
 
-### 安装部署
+### 启动（跨平台）
 
 ```bash
-# 1. 克隆项目
-git clone https://github.com/your-repo/lexiva.git
-cd lexiva
+# Windows / Mac / Linux 通用方式
+python run.py            # 显示帮助
+python run.py all        # 同时启动前后端
+python run.py docker     # Docker 启动（推荐）
 
-# 2. 后端启动
+# Windows 用户也可以双击
+run.bat
+
+# macOS / Linux 用户也可以用 shell 脚本
+./run.sh all
+./run.sh docker
+```
+
+### 手动分步启动
+
+```bash
+# 后端启动
 cd backend
 python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# venv\/scripts\banActivate  # Windows
+# Windows: venv\Scripts\activate  |  Mac/Linux: source venv/bin/activate
 pip install -r requirements.txt
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
-# 3. 前端启动
+# 前端启动（新窗口）
 cd frontend
 npm install
 npm run dev
@@ -167,7 +178,9 @@ npm run dev
 lexiva/
 ├── Dockerfile                  # Docker 镜像配置
 ├── docker-compose.yml          # Docker Compose 配置
-├── run.sh                      # 项目启动脚本
+├── run.py                      # 跨平台启动脚本（Windows/Mac/Linux）
+├── run.bat                     # Windows 快捷启动
+├── run.sh                      # Unix 系统启动脚本
 ├── pyproject.toml              # Python 项目配置
 ├── README.md                   # 本文件
 │
@@ -246,6 +259,71 @@ TTS_VOICE=zh-CN-XiaoxiaoNeural
 3. 提交更改 (`git commit -m 'Add xxx'`)
 4. 推送分支 (`git push origin feature/xxx`)
 5. 创建 Pull Request
+
+---
+
+## ⚠️ 常见问题
+
+### ffmpeg 未安装
+
+如果遇到 `ffmpeg not found` 错误，需要安装 ffmpeg：
+
+```powershell
+# PowerShell 中执行
+winget install ffmpeg
+```
+
+或 CMD 中：
+```cmd
+winget install ffmpeg
+```
+
+安装后**重启终端/PyCharm**。
+
+或者手动添加到 PATH（PowerShell）：
+```powershell
+$ffmpegBin = "C:\Users\Administrator\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1-full_build\bin"
+[Environment]::SetEnvironmentVariable("Path", "$([Environment]::GetEnvironmentVariable('Path', 'User'));$ffmpegBin", "User")
+```
+
+CMD 中：
+```cmd
+setx Path "%Path%;C:\Users\Administrator\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1-full_build\bin"
+```
+
+### pip 安装失败（代理错误）
+
+如果遇到代理超时错误：
+
+**PowerShell：**
+```powershell
+# 临时取消代理
+$env:HTTP_PROXY = ""
+$env:HTTPS_PROXY = ""
+
+# 或使用清华镜像（推荐）
+pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
+```
+
+**CMD：**
+```cmd
+set HTTP_PROXY=
+set HTTPS_PROXY=
+pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
+```
+
+### npm 命令找不到
+
+确保 Node.js 已安装并添加到 PATH。重启终端后执行：
+```powershell
+where.exe npm
+```
+
+### Whisper 语音识别
+
+支持两种方式：
+1. **本地模型**（faster-whisper）：需要 ffmpeg，首次下载模型较慢
+2. **API 方式**：配置 OpenAI API Key，无需本地模型
 
 ---
 

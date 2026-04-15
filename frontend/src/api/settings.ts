@@ -16,9 +16,31 @@ export interface AISettings {
   tencent_secret_id?: string
   tencent_secret_key?: string
   tencent_app_id?: string
+  // 火山引擎 TTS 配置
+  volcengine_app_id?: string
+  volcengine_secret_id?: string
+  volcengine_secret_key?: string
+  // 阿里云 TTS 配置
+  aliyun_access_key_id?: string
+  aliyun_access_key_secret?: string
+  // 百度语音 TTS 配置
+  baidu_app_id?: string
+  baidu_api_key?: string
+  baidu_secret_key?: string
   // 发音评测配置
   whisper_provider: string
   whisper_model: string
+  // 火山引擎 ASR 配置
+  volcengine_asr_app_id?: string
+  volcengine_asr_secret_id?: string
+  volcengine_asr_secret_key?: string
+  // 阿里云 ASR 配置
+  aliyun_asr_access_key_id?: string
+  aliyun_asr_access_key_secret?: string
+  // 讯飞语音 ASR 配置
+  xfyun_app_id?: string
+  xfyun_api_key?: string
+  xfyun_api_secret?: string
   created_at: string
   updated_at: string
 }

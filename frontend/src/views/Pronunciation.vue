@@ -347,11 +347,8 @@ const startRecording = async () => {
     currentMimeType.value = mimeType  // 保存当前使用的格式
     mediaRecorder.value = new MediaRecorder(stream, { mimeType })
     
-    // 验证 MediaRecorder 初始化是否成功
-    if (!mediaRecorder.value || mediaRecorder.value.state === 'inactive') {
-      stream.getTracks().forEach(track => track.stop())
-      throw new Error('MediaRecorder 初始化失败')
-    }
+    // 不立即检查 state，因为新创建的 MediaRecorder 初始状态就是 'inactive'
+    // 只有调用 start() 后才会变为 'recording'
     
     const chunks: BlobPart[] = []
     

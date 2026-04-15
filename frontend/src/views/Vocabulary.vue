@@ -15,10 +15,6 @@
           开始复习
           <el-tag size="small" type="danger" v-if="toReviewCount > 0">{{ toReviewCount }}</el-tag>
         </el-button>
-        <el-button @click="openSpellDialog" type="warning">
-          <el-icon><EditPen /></el-icon>
-          单词默写
-        </el-button>
         <el-button @click="showAIGenerateDialog = true" type="info">
           <el-icon><MagicStick /></el-icon>
           AI生成
@@ -256,6 +252,10 @@
         <el-button type="success" @click="startSpellTest" :disabled="selectedGeneratedWords.length === 0">
           开始默写 ({{ selectedGeneratedWords.length }}个)
         </el-button>
+        <el-button type="warning" @click="addToVocabulary" :disabled="selectedGeneratedWords.length === 0">
+          <el-icon><Plus /></el-icon>
+          加入单词本 ({{ selectedGeneratedWords.length }}个)
+        </el-button>
       </template>
     </el-dialog>
 
@@ -432,6 +432,7 @@ const searchWord = ref('')
 const filterStatus = ref('')
 const currentPage = ref(1)
 const pageSize = ref(10)
+const filteredTotal = ref(0)  // 过滤后的总记录数
 
 // 待复习数量
 const toReviewCount = ref(0)
@@ -568,12 +569,15 @@ const filterWords = () => {
     result = result.filter(w => w.status === filterStatus.value)
   }
   
+  // 保存过滤后的总数用于分页
+  filteredTotal.value = result.length
+  
   // 分页
   const start = (currentPage.value - 1) * pageSize.value
   filteredWords.value = result.slice(start, start + pageSize.value)
 }
 
-const totalWords = computed(() => filteredWords.value.length)
+const totalWords = computed(() => filteredTotal.value)
 
 // AI生成单词计算属性
 const selectedGeneratedWords = computed(() => generatedWords.value.filter(w => w.selected))
@@ -924,6 +928,47 @@ const startSpellTest = () => {
   } else {
     // 兼容旧代码：直接进入默写模式（会调用AI生成）
     startAIForSpell()
+  }
+}
+
+// 添加选中的单词到单词本
+const addToVocabulary = async () => {
+  const selected = selectedGeneratedWords.value
+  if (selected.length === 0) {
+    ElMessage.warning('请选择要添加的单词')
+    return
+  }
+
+  try {
+    // 准备单词数据
+    const wordsData = selected.map((w: any) => ({
+      word: w.word,
+      phonetic: w.phonetic || '',
+      meaning: w.meaning || '',
+      type: w.type || ''
+    }))
+
+    const res = await vocabApi.batchAdd(wordsData)
+
+    // 解析返回结果
+    const results = res.data?.data?.results || []
+    const addedWords = results.filter((r: any) => r.status === 'added').map((r: any) => r.word)
+    const skippedWords = results.filter((r: any) => r.status === 'skipped').map((r: any) => r.word)
+
+    // 关闭对话框并刷新单词列表
+    showAIGenerateDialog.value = false
+    loadWords()
+
+    // 根据结果类型显示不同消息
+    if (addedWords.length > 0 && skippedWords.length === 0) {
+      ElMessage.success(`成功添加 ${addedWords.length} 个单词到单词本`)
+    } else if (addedWords.length > 0 && skippedWords.length > 0) {
+      ElMessage.warning(`添加了 ${addedWords.length} 个单词，${skippedWords.length} 个已存在`)
+    } else {
+      ElMessage.info('所选单词均已存在，无需重复添加')
+    }
+  } catch (e: any) {
+    ElMessage.error(e.message || '添加失败，请重试')
   }
 }
 

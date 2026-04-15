@@ -115,7 +115,11 @@
                   <el-icon><Microphone /></el-icon>
                   <span>{{ msg.recognizedText }}</span>
                 </div>
-                <p v-html="formatMessage(msg.content)"></p>
+                <!-- 流式输出时显示逐字打字效果，完成后显示 Markdown 格式 -->
+                <p v-if="msg.isStreaming" class="streaming-content">
+                  {{ getDisplayContent(msg) }}<span class="typing-cursor"></span>
+                </p>
+                <p v-else v-html="formatMessage(msg.content)"></p>
                 <!-- 语法纠错 -->
                 <div v-if="msg.corrections && msg.corrections.length" class="corrections">
                   <div class="correction-title">
@@ -159,6 +163,7 @@
           </div>
           <div class="message-content">
             <div class="message-bubble loading">
+              <span class="loading-text">AI 正在输入</span>
               <div class="loading-dots">
                 <span></span><span></span><span></span>
               </div>
@@ -279,6 +284,7 @@ const messages = ref<Array<{
 
 const userInput = ref('')
 const isLoading = ref(false)
+const isStreaming = ref(false)  // 是否正在流式输出
 const currentScene = ref('daily')
 const chatContainer = ref<HTMLElement | null>(null)
 
@@ -299,6 +305,93 @@ let currentAudio: HTMLAudioElement | null = null
 const isRealtimeMode = ref(false)
 let websocket: WebSocket | null = null
 const interimText = ref('')  // 实时识别中间结果
+
+// ===== 流式输出控制 =====
+const displayContents = ref<Record<number, string>>({})  // 每个消息的显示内容
+let typingTimer: number | null = null
+let charIndexMap: Record<number, number> = {}  // 每个消息当前的字符索引
+const TYPING_SPEED = 25  // 每个字符间隔(ms)，越小越快
+const PAUSE_PUNCTUATION = ['.', ',', '!', '?', '。', '，', '！', '？', ';', '：']  // 停顿标点
+const PAUSE_DELAY = 180  // 标点处停顿时间(ms)
+const LONG_PAUSE_PUNCTUATION = ['.', '!', '?', '。', '！', '？']  // 长停顿标点
+const LONG_PAUSE_DELAY = 300  // 长停顿时间(ms)
+
+// 获取当前应该显示的内容（逐字打字效果）
+const getDisplayContent = (msg: any) => {
+  const index = messages.value.indexOf(msg)
+  if (index === -1) return msg.content
+  return displayContents.value[index] || ''
+}
+
+// 清空指定消息的显示内容
+const clearDisplayContent = (index: number) => {
+  delete displayContents.value[index]
+}
+
+// 流式打字效果函数 - 逐字符显示，模拟真实打字
+const typeWriterEffect = (fullContent: string, msgIndex: number, startFrom: number = 0) => {
+  // 如果是第一次开始，初始化字符索引
+  if (charIndexMap[msgIndex] === undefined) {
+    charIndexMap[msgIndex] = startFrom
+  }
+  
+  let charIndex = charIndexMap[msgIndex]
+  let isPaused = false
+  let pauseEndTime = 0
+  
+  const typeChar = () => {
+    // 如果已暂停，等待
+    if (isPaused && Date.now() < pauseEndTime) {
+      typingTimer = window.setTimeout(typeChar, 20)
+      return
+    }
+    isPaused = false
+    
+    // 显示到当前字符
+    const currentDisplay = fullContent.slice(0, charIndex + 1)
+    displayContents.value[msgIndex] = currentDisplay
+    
+    charIndex++
+    charIndexMap[msgIndex] = charIndex  // 保存当前索引
+    
+    // 检查是否完成
+    if (charIndex >= fullContent.length) {
+      // 打字完成，清除定时器
+      if (typingTimer) {
+        clearTimeout(typingTimer)
+        typingTimer = null
+      }
+      delete charIndexMap[msgIndex]
+      return
+    }
+    
+    // 检查当前字符是否为需要停顿的标点
+    const currentChar = fullContent[charIndex]
+    if (PAUSE_PUNCTUATION.includes(currentChar)) {
+      isPaused = true
+      // 长句末标点停顿更久
+      if (LONG_PAUSE_PUNCTUATION.includes(currentChar)) {
+        pauseEndTime = Date.now() + LONG_PAUSE_DELAY
+      } else {
+        pauseEndTime = Date.now() + PAUSE_DELAY
+      }
+    }
+    
+    // 继续打字
+    typingTimer = window.setTimeout(typeChar, TYPING_SPEED)
+  }
+  
+  // 开始打字
+  typeChar()
+}
+
+// 停止打字效果
+const stopTypeWriter = () => {
+  if (typingTimer) {
+    clearTimeout(typingTimer)
+    typingTimer = null
+  }
+}
 
 // 处理模式切换 (Tab 切换)
 const handleModeChange = (mode: string) => {
@@ -458,6 +551,10 @@ const formatMessage = (content: string) => {
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
     // `代码`
     .replace(/`(.+?)`/g, '<code class="inline-code">$1</code>')
+    // 标题 ### -> h3, ## -> h2, # -> h1
+    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
     // 引用块
     .replace(/^&gt;\s*(.+)$/gm, '<blockquote>$1</blockquote>')
     // 列表
@@ -465,8 +562,8 @@ const formatMessage = (content: string) => {
     // 数字列表
     .replace(/^\d+\.\s+(.+)$/gm, '<li class="numbered">$1</li>')
   
-  // 包裹列表
-  formatted = formatted.replace(/(<li>.*<\/li>)/gs, '<ul>$1</ul>')
+  // 包裹连续的列表项为 ul（处理多行列表）
+  formatted = formatted.replace(/(<li>.*?<\/li>)+/gs, '<ul>$&</ul>')
   
   return formatted
 }
@@ -481,7 +578,7 @@ const copyMessage = async (content: string) => {
   }
 }
 
-// 发送消息
+// 发送消息 - 使用流式 API
 const sendMessage = async () => {
   if (!userInput.value.trim()) {
     ElMessage.warning('请输入内容')
@@ -493,35 +590,109 @@ const sendMessage = async () => {
   userInput.value = ''
 
   // 添加用户消息
-  messages.value.push({
+  const userMsg = {
     role: 'user',
     content: userMessage,
     time: getCurrentTime()
-  })
+  }
+  messages.value.push(userMsg)
+
+  // 创建 AI 消息占位符（用于流式显示）
+  const aiMsg = {
+    role: 'assistant',
+    content: '',
+    time: getCurrentTime(),
+    corrections: [],
+    isStreaming: true  // 标记为流式输出中
+  }
+  const aiMsgIndex = messages.value.length  // 记录 AI 消息的索引
+  messages.value.push(aiMsg)
 
   isLoading.value = true
+  isStreaming.value = true
   scrollToBottom()
 
   try {
-    const res = await chatApi.send(userMessage, currentScene.value)
-    // 后端返回 reply 字段，兼容 response
-    const replyText = res.data?.reply || res.data?.response || '抱歉，我理解你的意思了。'
-    const corrections = res.data?.corrections || []
+    const response = await chatApi.streamSend(userMessage, currentScene.value)
     
-    // 添加AI回复
-    messages.value.push({
-      role: 'assistant',
-      content: replyText,
-      time: getCurrentTime(),
-      corrections: corrections
-    })
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+
+    const reader = response.body?.getReader()
+    if (!reader) {
+      throw new Error('无法读取响应')
+    }
+
+    const decoder = new TextDecoder()
+    let fullContent = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      const chunk = decoder.decode(value, { stream: true })
+      const lines = chunk.split('\n')
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const data = line.slice(6)
+          if (data === '[DONE]') continue
+
+          try {
+            const parsed = JSON.parse(data)
+            if (parsed.chunk) {
+              fullContent += parsed.chunk
+              // 更新完整内容用于最终渲染
+              messages.value[aiMsgIndex].content = fullContent
+              
+              // 实时显示流式内容 - 立即更新显示内容，不等待
+              if (!displayContents.value[aiMsgIndex]) {
+                displayContents.value[aiMsgIndex] = ''
+              }
+              
+              // 同时启动打字机效果，逐字符显示（但跳过已显示的字符）
+              // 如果打字机未启动，从当前索引开始
+              if (!typingTimer || !charIndexMap[aiMsgIndex]) {
+                // 启动新的打字机效果
+                const currentLen = displayContents.value[aiMsgIndex].length
+                if (currentLen < fullContent.length) {
+                  typeWriterEffect(fullContent, aiMsgIndex, currentLen)
+                }
+              }
+              // 如果已有内容，直接追加显示（更接近实时流式效果）
+              displayContents.value[aiMsgIndex] = fullContent
+              
+              scrollToBottom()
+            }
+            if (parsed.done && parsed.reply) {
+              // 流式输出完成，更新为完整内容
+              fullContent = parsed.reply
+              messages.value[aiMsgIndex].content = fullContent
+              displayContents.value[aiMsgIndex] = fullContent
+              messages.value[aiMsgIndex].corrections = parsed.corrections || []
+              
+              // 停止打字机效果
+              stopTypeWriter()
+              
+              // 标记流式输出完成，触发 Markdown 渲染
+              messages.value[aiMsgIndex].isStreaming = false
+              isStreaming.value = false
+              
+              scrollToBottom()
+            }
+          } catch (e) {
+            // 忽略解析错误，继续处理下一行
+          }
+        }
+      }
+    }
   } catch (error: any) {
     ElMessage.error('发送失败: ' + (error.message || '请稍后重试'))
-    messages.value.push({
-      role: 'assistant',
-      content: '抱歉，发生了错误。请稍后重试。',
-      time: getCurrentTime()
-    })
+    messages.value[aiMsgIndex].content = '抱歉，发生了错误。请稍后重试。'
+    messages.value[aiMsgIndex].isStreaming = false  // 错误时也标记为完成
+    isStreaming.value = false
+    stopTypeWriter()  // 停止打字机效果
   } finally {
     isLoading.value = false
     scrollToBottom()
@@ -769,7 +940,7 @@ const playAudioByIndex = (index: number, audioBase64?: string) => {
     byteNumbers[i] = byteCharacters.charCodeAt(i)
   }
   const byteArray = new Uint8Array(byteNumbers)
-  const audioBlob = new Blob([byteArray], { type: 'audio/mp4' })
+  const audioBlob = new Blob([byteArray], { type: 'audio/webm' })
   const audioUrl = URL.createObjectURL(audioBlob)
   
   currentAudio = new Audio(audioUrl)
@@ -818,6 +989,7 @@ const stopAudio = () => {
 onUnmounted(() => {
   stopAudio()
   disconnectWebSocket()
+  stopTypeWriter()  // 停止打字机效果
 })
 
 // 根据场景获取快捷回复建议
@@ -854,22 +1026,35 @@ onMounted(async () => {
   try {
     const res = await chatApi.getHistory()
     // 后端返回格式: { items: [...], total, page, limit }
-    // 需要转换为前端格式
+    // 需要转换为前端格式，按时间顺序交错显示
     if (res.data && res.data.items) {
-      messages.value = res.data.items.map((item: any) => ({
-        role: 'user',
-        content: item.user_message,
-        time: item.created_at ? new Date(item.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : getCurrentTime(),
-        corrections: []
-      }))
-      // 添加 AI 回复
-      const aiMessages = res.data.items.map((item: any) => ({
-        role: 'assistant',
-        content: item.ai_message,
-        time: item.created_at ? new Date(item.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : getCurrentTime(),
-        corrections: item.corrections || []
-      }))
-      messages.value = messages.value.concat(aiMessages)
+      // 按时间顺序排序
+      const sortedItems = [...res.data.items].sort((a: any, b: any) => 
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      )
+      
+      // 按时间顺序交错添加 user 和 assistant 消息
+      const loadedMessages: typeof messages.value = []
+      sortedItems.forEach((item: any) => {
+        // 添加用户消息
+        loadedMessages.push({
+          role: 'user',
+          content: item.user_message,
+          time: item.created_at ? new Date(item.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : getCurrentTime()
+        })
+        // 添加 AI 回复
+        if (item.ai_message) {
+          loadedMessages.push({
+            role: 'assistant',
+            content: item.ai_message,
+            time: item.created_at ? new Date(item.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : getCurrentTime(),
+            corrections: item.corrections || []
+          })
+        }
+      })
+      messages.value = loadedMessages
+      // 加载完成后滚动到底部（显示最新对话）
+      nextTick(() => scrollToBottom())
     }
   } catch (e) {
     console.log('无历史记录')
@@ -1247,6 +1432,37 @@ onMounted(async () => {
   position: relative;
 }
 
+/* 流式输出时的纯文本样式 */
+.message-bubble .streaming-content {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  margin: 0;
+  animation: typeIn 0.3s ease-out;
+}
+
+/* 打字机光标动画 - 模拟真实打字效果 */
+.typing-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1.2em;
+  background: #667eea;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  animation: cursor-blink 0.65s infinite;
+  border-radius: 1px;
+}
+
+@keyframes cursor-blink {
+  0%, 45% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+/* 打字机淡入效果 */
+@keyframes typeIn {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 .is-user .message-bubble {
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: #fff;
@@ -1264,6 +1480,20 @@ onMounted(async () => {
 
 .message-bubble.loading {
   padding: 18px 24px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.loading-text {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 13px;
+  animation: textPulse 1.5s infinite;
+}
+
+@keyframes textPulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
 }
 
 .loading-dots {

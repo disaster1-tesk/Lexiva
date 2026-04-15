@@ -8,7 +8,7 @@
       </div>
       <div class="streak-badge">
         <el-icon><Sunrise /></el-icon>
-        <span>连续学习 <strong>7</strong> 天</span>
+        <span>连续学习 <strong>{{ stats.streakDays || 0 }}</strong> 天</span>
       </div>
     </div>
 
@@ -69,9 +69,10 @@
         <el-col :span="4" v-for="item in quickActions" :key="item.path">
           <div class="action-card" @click="router.push(item.path)">
             <div class="action-icon" :style="{ background: item.color }">
-              <el-icon :size="24"><component :is="item.icon" /></el-icon>
+              <el-icon :size="28"><component :is="item.icon" /></el-icon>
             </div>
             <div class="action-label">{{ item.label }}</div>
+            <div class="action-desc">{{ item.desc }}</div>
           </div>
         </el-col>
       </el-row>
@@ -147,8 +148,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, onMounted, computed } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { statisticsApi } from '../api'
 import {
   Reading, ChatDotRound, Edit, Microphone,
@@ -156,80 +157,96 @@ import {
 } from '@element-plus/icons-vue'
 
 const router = useRouter()
+const route = useRoute()
 
 // 统计数据
 const stats = ref({
-  totalWords: 156,
-  totalConversations: 28,
-  totalWritings: 12,
+  totalWords: 0,
+  totalConversations: 0,
+  totalWritings: 0,
   totalGrammar: 0,
   chatMinutes: 0,
   pronunciationScore: 0,
-  totalPronunciations: 0
+  totalPronunciations: 0,
+  streakDays: 0
 })
 
-// 快捷入口
-const quickActions = [
-  { path: '/chat', label: 'AI 对话', icon: 'ChatDotRound', color: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' },
-  { path: '/pronunciation', label: '发音评测', icon: 'Microphone', color: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' },
-  { path: '/listening', label: '听力训练', icon: 'Headset', color: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)' },
-  { path: '/vocabulary', label: '单词本', icon: 'Notebook', color: 'linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)' },
-  { path: '/grammar', label: '语法学习', icon: 'DataAnalysis', color: 'linear-gradient(135deg, #a18cd1 0%, #fbc2eb 100%)' },
-  { path: '/writing', label: '写作批改', icon: 'Edit', color: 'linear-gradient(135deg, #fa709a 0%, #fee140 100%)' }
-]
+// 从路由动态获取所有模块作为快捷入口
+const quickActions = computed(() => {
+  const routes = router.getRoutes().filter(r => r.meta?.title && r.meta?.icon && r.path !== '/')
+  return routes.map(r => ({
+    path: r.path,
+    label: r.meta.title || r.name,
+    icon: r.meta.icon,
+    color: r.meta.color || 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+    desc: r.meta.desc || ''
+  }))
+})
 
-// 最近活动
-const recentActivities = [
-  {
-    time: '2024-01-15 14:30',
-    title: '完成发音练习',
-    desc: '练习了 "The quick brown fox" 句子',
-    icon: 'Microphone',
-    color: '#67C23A'
-  },
-  {
-    time: '2024-01-15 10:00',
-    title: '学习新单词',
-    desc: '添加了 5 个新单词到单词本',
-    icon: 'Notebook',
-    color: '#409EFF'
-  },
-  {
-    time: '2024-01-14 20:00',
-    title: 'AI 对话练习',
-    desc: '与 AI 进行了 15 分钟的英语对话',
-    icon: 'ChatDotRound',
-    color: '#E6A23C'
-  },
-  {
-    time: '2024-01-14 16:00',
-    title: '写作练习',
-    desc: '提交了一篇 150 字的英语作文',
-    icon: 'Edit',
-    color: '#909399'
+// 最近活动 - 从API获取
+const recentActivities = ref<any[]>([])
+
+// 格式化日期
+const formatDate = (dateStr: string) => {
+  const date = new Date(dateStr)
+  const now = new Date()
+  const diffMs = now.getTime() - date.getTime()
+  const diffMins = Math.floor(diffMs / 60000)
+  const diffHours = Math.floor(diffMs / 3600000)
+  const diffDays = Math.floor(diffMs / 86400000)
+  
+  if (diffMins < 60) return `${diffMins}分钟前`
+  if (diffHours < 24) return `${diffHours}小时前`
+  if (diffDays < 7) return `${diffDays}天前`
+  return dateStr
+}
+
+// 转换后端活动数据为前端格式
+const transformActivity = (activity: any) => {
+  const colorMap: Record<string, string> = {
+    chat: '#667eea',
+    pronunciation: '#f5576c',
+    writing: '#fa709a',
+    word_reviewed: '#43e97b',
+    word_added: '#4facfe',
+    listening: '#00f2fe',
+    grammar: '#a18cd1'
   }
-]
+  return {
+    time: formatDate(activity.date),
+    title: activity.title,
+    desc: activity.description,
+    icon: activity.icon,
+    color: colorMap[activity.type] || '#409EFF'
+  }
+}
 
-// 获取统计数据
+// 获取统计数据和活动记录
 onMounted(async () => {
   try {
-    const res = await statisticsApi.getSummary()
-    // 后端返回格式: { code: 0, data: { total_words, ... } }
-    // 兼容多种响应格式
-    const data = res?.data?.data ?? res?.data ?? null
-    if (data) {
+    // 获取统计数据
+    const summaryRes = await statisticsApi.getSummary()
+    const summaryData = summaryRes?.data?.data ?? summaryRes?.data ?? null
+    if (summaryData) {
       stats.value = {
-        totalWords: data.total_words || 0,
-        totalConversations: data.total_conversations || 0,
-        totalWritings: data.total_writings || 0,
-        totalGrammar: data.total_grammar_learned || data.total_grammar_exercises || 0,
-        chatMinutes: data.chat_minutes || 0,
-        pronunciationScore: data.pronunciation_avg_score || 0,
-        totalPronunciations: data.total_pronunciations || 0
+        totalWords: summaryData.total_words || 0,
+        totalConversations: summaryData.total_conversations || 0,
+        totalWritings: summaryData.total_writings || 0,
+        totalGrammar: summaryData.total_grammar_learned || summaryData.total_grammar_exercises || 0,
+        chatMinutes: summaryData.chat_minutes || 0,
+        pronunciationScore: summaryData.pronunciation_avg_score || 0,
+        totalPronunciations: summaryData.total_pronunciations || 0,
+        streakDays: summaryData.streak_days || 0
       }
     }
+    
+    // 获取最近活动
+    const activitiesRes = await statisticsApi.getActivities(7)
+    const activitiesData = activitiesRes?.data?.data ?? activitiesRes?.data ?? []
+    recentActivities.value = activitiesData.map(transformActivity).slice(0, 10)
   } catch (e) {
-    console.log('使用默认统计数据')
+    console.log('获取数据失败，使用空数据', e)
+    recentActivities.value = []
   }
 })
 </script>
@@ -344,33 +361,52 @@ onMounted(async () => {
 
 .action-card {
   background: #fff;
-  border-radius: 12px;
-  padding: 20px;
+  border-radius: 16px;
+  padding: 24px 16px;
   text-align: center;
   cursor: pointer;
-  transition: all 0.3s;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+  border: 1px solid #f0f0f0;
 }
 
 .action-card:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 8px 20px rgba(0,0,0,0.1);
+  transform: translateY(-8px) scale(1.02);
+  box-shadow: 0 12px 32px rgba(0,0,0,0.12);
+  border-color: transparent;
+}
+
+.action-card:active {
+  transform: translateY(-4px) scale(0.98);
 }
 
 .action-icon {
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
-  margin: 0 auto 12px;
+  margin: 0 auto 16px;
   color: #fff;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.action-card:hover .action-icon {
+  transform: scale(1.15) rotate(5deg);
 }
 
 .action-label {
-  font-size: 14px;
-  color: #606266;
+  font-size: 15px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 6px;
+}
+
+.action-desc {
+  font-size: 12px;
+  color: #909399;
+  line-height: 1.4;
 }
 
 .progress-section {

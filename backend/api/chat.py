@@ -3,10 +3,13 @@ Chat API Routes
 AI conversation endpoints
 """
 import logging
+import json
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
+import asyncio
 from services.ai_chat import chat_service
 from services.ai_whisper import whisper_service
 from services.ai_tts import tts_service
@@ -77,6 +80,87 @@ async def send_message(request: ChatRequest):
             pass
     
     return ChatResponse(**result)
+
+
+async def stream_message(request: ChatRequest):
+    """
+    Send a message and get AI response as streaming
+    """
+    logger.info(f"Stream chat request: scene={request.scene}, message_len={len(request.message)}")
+
+    if not request.message.strip():
+        logger.warning("Empty message received")
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+
+    async def generate():
+        full_reply = ""
+        corrections = []
+
+        try:
+            async for chunk in chat_service.stream_chat(request.message, request.scene):
+                if chunk.get("done"):
+                    full_reply = chunk.get("reply", "")
+                    # Parse corrections
+                    corrections = chat_service._parse_corrections(request.message, full_reply)
+
+                    # 保存到数据库
+                    session = next(get_db())
+                    try:
+                        conversation = Conversation(
+                            scene=request.scene,
+                            user_message=request.message,
+                            ai_message=full_reply,
+                            corrections=corrections
+                        )
+                        session.add(conversation)
+
+                        # 更新今日统计
+                        from models import Statistics
+                        today = datetime.now().strftime("%Y-%m-%d")
+                        stats = session.query(Statistics).filter(Statistics.date == today).first()
+                        if not stats:
+                            stats = Statistics(date=today)
+                            session.add(stats)
+                            session.flush()
+                        stats.chat_count += 1
+
+                        session.commit()
+                    finally:
+                        try:
+                            session.close()
+                        except Exception:
+                            pass
+
+                    # 发送完成信号
+                    yield f"data: {json.dumps({'done': True, 'reply': full_reply, 'corrections': corrections})}\n\n"
+                    return
+
+                chunk_content = chunk.get("chunk", "")
+                if chunk_content:
+                    yield f"data: {json.dumps({'chunk': chunk_content})}\n\n"
+
+        except Exception as e:
+            logger.error(f"Stream chat error: {e}", exc_info=True)
+            yield f"data: {json.dumps({'done': True, 'reply': f'发生错误: {str(e)}', 'error': str(e)})}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
+# 流式端点
+@router.post("/stream")
+async def stream_message_endpoint(request: ChatRequest):
+    """
+    SSE streaming chat endpoint
+    """
+    return await stream_message(request)
 
 
 @router.get("/history")

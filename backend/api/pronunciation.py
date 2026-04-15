@@ -229,8 +229,7 @@ async def get_sentence_audio(sentence_id: int):
 
     # Generate TTS audio
     try:
-        import asyncio
-        result = asyncio.run(tts_service.synthesize(reference))
+        result = await tts_service.synthesize(reference)
 
         if not result.get("success"):
             raise HTTPException(status_code=500, detail=result.get("error", "TTS failed"))

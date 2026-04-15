@@ -192,3 +192,103 @@ async def record_activity(activity: dict):
             session.close()
         except Exception:
             pass
+
+
+@router.get("/activities")
+async def get_activities(days: int = 7):
+    """Get recent learning activities - 返回最近的活动记录"""
+    logger.info(f"Get recent activities: days={days}")
+    
+    session = next(get_db())
+    try:
+        activities = []
+        
+        # 获取最近 days 天的统计数据
+        today = datetime.now()
+        for i in range(days):
+            date = (today - timedelta(days=i)).strftime("%Y-%m-%d")
+            day_stat = session.query(Statistics).filter(Statistics.date == date).first()
+            
+            if day_stat:
+                # 将每个有活动的字段转换为活动记录
+                if day_stat.chat_count > 0:
+                    activities.append({
+                        "id": f"chat_{date}",
+                        "type": "chat",
+                        "title": "AI 对话练习",
+                        "description": f"完成 {day_stat.chat_count} 次对话",
+                        "date": date,
+                        "icon": "ChatLineRound"
+                    })
+                
+                if day_stat.pronunciation_count > 0:
+                    activities.append({
+                        "id": f"pronunciation_{date}",
+                        "type": "pronunciation",
+                        "title": "发音练习",
+                        "description": f"完成 {day_stat.pronunciation_count} 次练习",
+                        "date": date,
+                        "icon": "Microphone"
+                    })
+                
+                if day_stat.writing_count > 0:
+                    activities.append({
+                        "id": f"writing_{date}",
+                        "type": "writing",
+                        "title": "写作练习",
+                        "description": f"完成 {day_stat.writing_count} 篇作文",
+                        "date": date,
+                        "icon": "Edit"
+                    })
+                
+                if day_stat.word_reviewed > 0:
+                    activities.append({
+                        "id": f"word_reviewed_{date}",
+                        "type": "word_reviewed",
+                        "title": "单词复习",
+                        "description": f"复习 {day_stat.word_reviewed} 个单词",
+                        "date": date,
+                        "icon": "Notebook"
+                    })
+                
+                if day_stat.word_learned > 0:
+                    activities.append({
+                        "id": f"word_learned_{date}",
+                        "type": "word_added",
+                        "title": "添加新单词",
+                        "description": f"添加 {day_stat.word_learned} 个新单词",
+                        "date": date,
+                        "icon": "Plus"
+                    })
+                
+                if day_stat.listening_minutes > 0:
+                    activities.append({
+                        "id": f"listening_{date}",
+                        "type": "listening",
+                        "title": "听力训练",
+                        "description": f"听力训练 {day_stat.listening_minutes} 分钟",
+                        "date": date,
+                        "icon": "Headset"
+                    })
+                
+                if day_stat.grammar_learned > 0:
+                    activities.append({
+                        "id": f"grammar_{date}",
+                        "type": "grammar",
+                        "title": "语法学习",
+                        "description": f"学习 {day_stat.grammar_learned} 个语法点",
+                        "date": date,
+                        "icon": "Reading"
+                    })
+        
+        # 按日期倒序排列
+        activities.sort(key=lambda x: x["date"], reverse=True)
+        
+        logger.info(f"Activities generated: {len(activities)} records")
+        
+        return {"code": 0, "data": activities}
+    finally:
+        try:
+            session.close()
+        except Exception:
+            pass

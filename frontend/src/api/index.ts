@@ -44,7 +44,22 @@ export { getResponseData, isResponseSuccess, api }
 export const chatApi = {
   send: (message: string, scene: string = 'daily') =>
     api.post('/api/chat/send', { message, scene }),
-  
+
+  // 流式对话
+  streamSend: (message: string, scene: string = 'daily') => {
+    const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:'
+    const baseUrl = API_BASE || `${protocol}//${window.location.host}`
+    const url = `${baseUrl}/api/chat/stream`
+
+    return fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ message, scene })
+    })
+  },
+
   getHistory: (page = 1, limit = 20) =>
     api.get('/api/chat/history', { params: { page, limit } }),
   
@@ -99,6 +114,9 @@ export const vocabApi = {
   add: (word: string) => api.post('/api/vocabulary/add', { word }),
 
   delete: (id: number) => api.delete(`/api/vocabulary/${id}`),
+
+  // 批量添加单词到单词本
+  batchAdd: (words: any[]) => api.post('/api/vocabulary/batch-add', { words }),
 
   review: (wordId: number, result: string) =>
     api.post('/api/vocabulary/review', { word_id: wordId, result }),
@@ -158,7 +176,10 @@ export const statisticsApi = {
   getSummary: () => api.get('/api/statistics/summary'),
   
   getTrend: (days = 7) =>
-    api.get('/api/statistics/trend', { params: { days } })
+    api.get('/api/statistics/trend', { params: { days } }),
+  
+  getActivities: (days = 7) =>
+    api.get('/api/statistics/activities', { params: { days } })
 }
 
 // Dictation API

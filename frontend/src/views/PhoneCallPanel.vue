@@ -229,11 +229,93 @@ let mediaRecorder: MediaRecorder | null = null
 let audioStream: MediaStream | null = null
 let durationTimer: number | null = null
 let currentAudio: HTMLAudioElement | null = null
+let currentAudioSource: AudioBufferSourceNode | null = null  // AudioContext 音频源节点
 let recordingStartTime = 0  // 录音开始时间
 let audioContext: AudioContext | null = null  // 音频上下文（用于音量检测）
 let analyser: AnalyserNode | null = null  // 分析节点（用于音量检测）
 let audioLevelCheckInterval: number | null = null  // 音量检测定时器
 let hasAudioInput = false  // 是否有声音输入
+
+// ===== 音频预加载机制 =====
+let preloadedAudioBuffer: AudioBuffer | null = null  // 预加载的音频Buffer
+let preloadedAudioContext: AudioContext | null = null  // 预加载用的 AudioContext
+let preloadPromise: Promise<void> | null = null  // 预加载 Promise，用于等待预加载完成
+let currentAudioText = ''  // 当前音频对应的文本
+
+// 预加载音频 - 在收到 AI 响应时提前解码
+const preloadAudio = (audioBase64: string) => {
+  // 清除之前的预加载
+  preloadedAudioBuffer = null
+  preloadPromise = null
+  
+  // 创建预加载 Promise
+  preloadPromise = (async () => {
+    try {
+      // 创建专用的 AudioContext 用于预加载
+      if (!preloadedAudioContext) {
+        preloadedAudioContext = new AudioContext()
+      }
+      if (preloadedAudioContext.state === 'suspended') {
+        await preloadedAudioContext.resume()
+      }
+      
+      // 解码 base64
+      const byteCharacters = atob(audioBase64)
+      const byteNumbers = new Array(byteCharacters.length)
+      for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i)
+      }
+      const byteArray = new Uint8Array(byteNumbers)
+      
+      // 预解码音频
+      preloadedAudioBuffer = await preloadedAudioContext.decodeAudioData(byteArray.buffer)
+      console.log('音频预加载完成，预解码时长:', preloadedAudioBuffer.duration, '秒')
+    } catch (error) {
+      console.error('音频预加载失败:', error)
+      preloadedAudioBuffer = null
+    }
+  })()
+}
+
+// 播放预加载的音频 - 等待预加载完成后播放
+const playPreloadedAudio = async (): Promise<boolean> => {
+  // 等待预加载完成
+  if (preloadPromise) {
+    await preloadPromise
+  }
+  
+  if (!preloadedAudioBuffer || !preloadedAudioContext) {
+    console.warn('没有预加载的音频')
+    return false
+  }
+  
+  // 确保 AudioContext 处于 running 状态
+  if (preloadedAudioContext.state === 'suspended') {
+    await preloadedAudioContext.resume()
+  }
+  
+  // 创建音频源节点
+  const source = preloadedAudioContext.createBufferSource()
+  source.buffer = preloadedAudioBuffer
+  source.connect(preloadedAudioContext.destination)
+  
+  // 播放完成回调
+  source.onended = () => {
+    aiStatus.value = 'waiting'
+    aiText.value = ''
+  }
+  
+  // 立即播放（无延迟，因为已预解码）
+  source.start(0)
+  currentAudioSource = source
+  aiStatus.value = 'speaking'
+  
+  // 清除预加载，为下一次准备
+  preloadedAudioBuffer = null
+  preloadPromise = null
+  
+  return true
+}
 
 // 弹窗
 const showEndDialog = ref(false)
@@ -321,6 +403,11 @@ const handleMessage = (data: any) => {
       }
       break
     case 'ai_response':
+      // 提前开始预加载音频（如果有音频数据）
+      if (data.audio) {
+        preloadAudio(data.audio)
+      }
+      // 异步处理 AI 响应，等待预加载完成后再播放
       handleAIResponse(data)
       break
     case 'error':
@@ -364,57 +451,130 @@ const handleCallStatus = (data: any) => {
 }
 
 // 处理 AI 回复
-const handleAIResponse = (data: any) => {
+const handleAIResponse = async (data: any) => {
   messageCount.value++
-  
+
   if (data.status === 'ended') {
     callStatus.value = 'ended'
     showEndDialog.value = true
     return
   }
-  
+
   aiText.value = data.text
-  aiStatus.value = 'speaking'
-  
+
+  // 播放音频 - 优先使用预加载的音频，否则实时解码
   if (data.audio) {
-    playAudio(data.audio)
-  }
-  
-  if (currentAudio) {
-    currentAudio.onended = () => {
-      setTimeout(() => {
-        if (aiStatus.value === 'speaking') {
-          aiStatus.value = 'waiting'
-          aiText.value = ''
-        }
-      }, 1000)
+    // 尝试播放预加载的音频（异步等待预加载完成）
+    const played = await playPreloadedAudio()
+    if (!played) {
+      // 预加载失败，实时解码播放
+      playAudio(data.audio)
     }
+  }
+  // 如果没有音频，手动设置状态
+  else {
+    aiStatus.value = 'speaking'
+    setTimeout(() => {
+      if (aiStatus.value === 'speaking') {
+        aiStatus.value = 'waiting'
+        aiText.value = ''
+      }
+    }, 3000)
   }
 }
 
-// 播放音频
+// 播放音频 - 使用 AudioContext 预解码，解决开头单词丢失问题
 const playAudio = (audioBase64: string) => {
-  stopAudio()
-  
+  stopAudio()  // 先停止之前的播放
+
+  // 创建或恢复 AudioContext
+  const initAudioContext = async (): Promise<AudioContext> => {
+    if (!audioContext) {
+      audioContext = new AudioContext()
+    }
+    // 确保 AudioContext 处于 running 状态（解决浏览器自动暂停问题）
+    if (audioContext.state === 'suspended') {
+      await audioContext.resume()
+    }
+    return audioContext
+  }
+
+  // 解码 base64 为 ArrayBuffer
   const byteCharacters = atob(audioBase64)
   const byteNumbers = new Array(byteCharacters.length)
   for (let i = 0; i < byteCharacters.length; i++) {
     byteNumbers[i] = byteCharacters.charCodeAt(i)
   }
   const byteArray = new Uint8Array(byteNumbers)
-  const audioBlob = new Blob([byteArray], { type: 'audio/mp4' })
+
+  // 使用 AudioContext 预解码音频
+  initAudioContext().then(async context => {
+    try {
+      // 同步解码
+      const audioBuffer = await context.decodeAudioData(byteArray.buffer.slice(0))
+      
+      // 创建音频源节点
+      const source = context.createBufferSource()
+      source.buffer = audioBuffer
+      source.connect(context.destination)
+
+      // 播放完成回调
+      source.onended = () => {
+        aiStatus.value = 'waiting'
+        aiText.value = ''
+      }
+
+      // 确保 AudioContext 状态正确后立即播放
+      if (context.state === 'suspended') {
+        await context.resume()
+      }
+      source.start(0)
+      currentAudioSource = source
+      aiStatus.value = 'speaking'
+    } catch (error) {
+      console.error('音频解码失败:', error)
+      // 回退到旧的 Audio 方式
+      fallbackPlayAudio(audioBase64)
+    }
+  }).catch(error => {
+    console.error('AudioContext 初始化失败:', error)
+    fallbackPlayAudio(audioBase64)
+  })
+}
+
+// 回退方案：使用传统 Audio 播放
+const fallbackPlayAudio = (audioBase64: string) => {
+  const byteCharacters = atob(audioBase64)
+  const byteNumbers = new Array(byteCharacters.length)
+  for (let i = 0; i < byteCharacters.length; i++) {
+    byteNumbers[i] = byteCharacters.charCodeAt(i)
+  }
+  const byteArray = new Uint8Array(byteNumbers)
+  const audioBlob = new Blob([byteArray], { type: 'audio/webm' })
   const audioUrl = URL.createObjectURL(audioBlob)
-  
+
   currentAudio = new Audio(audioUrl)
   currentAudio.play().catch(console.error)
-  
+
   currentAudio.onended = () => {
     URL.revokeObjectURL(audioUrl)
+    aiStatus.value = 'waiting'
+    aiText.value = ''
   }
 }
 
 // 停止音频
 const stopAudio = () => {
+  // 停止 AudioBufferSourceNode（如果使用 AudioContext 播放）
+  if (currentAudioSource) {
+    try {
+      currentAudioSource.stop()
+    } catch (e) {
+      // 忽略已停止的错误
+    }
+    currentAudioSource = null
+  }
+  // 停止 HTMLAudioElement（回退方案）
   if (currentAudio) {
     currentAudio.pause()
     currentAudio = null

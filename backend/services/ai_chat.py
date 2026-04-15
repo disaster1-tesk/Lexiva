@@ -6,6 +6,8 @@ import os
 import httpx
 import logging
 import time
+import json
+import asyncio
 from typing import Optional
 from db.connection import get_db
 from models import AISettings
@@ -21,17 +23,49 @@ class AIChatService:
         "deepseek": {
             "base_url": "https://api.deepseek.com/v1/chat/completions",
             "default_model": "deepseek-chat",
-            "env_key": "DEEPSEEK_API_KEY"
+            "env_key": "DEEPSEEK_API_KEY",
+            "auth_type": "bearer"  # OpenAI compatible
         },
         "openai": {
             "base_url": "https://api.openai.com/v1/chat/completions",
             "default_model": "gpt-4o-mini",
-            "env_key": "OPENAI_API_KEY"
+            "env_key": "OPENAI_API_KEY",
+            "auth_type": "bearer"
         },
         "ollama": {
             "base_url": "http://localhost:11434/v1/chat/completions",
             "default_model": "llama3",
-            "env_key": "OLLAMA_API_KEY"
+            "env_key": "OLLAMA_API_KEY",
+            "auth_type": "bearer",
+            "is_local": True
+        },
+        # 通义千问 (阿里云)
+        "qwen": {
+            "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+            "default_model": "qwen-turbo",
+            "env_key": "QWEN_API_KEY",
+            "auth_type": "bearer"
+        },
+        # 智谱清言 (ChatGLM)
+        "zhipu": {
+            "base_url": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+            "default_model": "glm-4-flash",
+            "env_key": "ZHIPU_API_KEY",
+            "auth_type": "bearer"
+        },
+        # Claude (Anthropic)
+        "anthropic": {
+            "base_url": "https://api.anthropic.com/v1/messages",
+            "default_model": "claude-3-5-sonnet-20241022",
+            "env_key": "ANTHROPIC_API_KEY",
+            "auth_type": "anthropic"  # Special header format
+        },
+        # Gemini (Google)
+        "google": {
+            "base_url": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            "default_model": "gemini-1.5-flash",
+            "env_key": "GOOGLE_API_KEY",
+            "auth_type": "google"  # URL parameter format
         }
     }
     
@@ -88,6 +122,14 @@ class AIChatService:
             return settings.base_url
         return self.PROVIDERS[settings.provider]["base_url"]
     
+    def _is_local_url(self, url: str) -> bool:
+        """检测 URL 是否为本地地址"""
+        if not url:
+            return False
+        local_patterns = ["localhost", "127.0.0.1", "0.0.0.0", "[::1]"]
+        url_lower = url.lower()
+        return any(pattern in url_lower for pattern in local_patterns)
+    
     async def chat(self, message: str, scene: str = "daily") -> dict:
         """
         Send message to AI and get response
@@ -109,9 +151,19 @@ class AIChatService:
         top_p = settings.top_p
         
         api_key = self._get_api_key(settings)
+        provider_config = self._get_provider_config(provider)
         base_url = self._get_base_url(settings)
+        auth_type = provider_config.get("auth_type", "bearer")
         
-        if not api_key:
+        # Ollama 本地模型（localhost/127.0.0.1）不需要 API Key
+        is_local_ollama = settings.provider == "ollama" and self._is_local_url(base_url)
+        if not api_key and not is_local_ollama:
+            if settings.provider == "ollama":
+                logger.warning("Ollama remote API requires API Key")
+                return {
+                    "reply": "Ollama 远程 API 需要配置 API Key，请前往设置页面配置。",
+                    "corrections": []
+                }
             logger.warning("API Key not configured")
             return {
                 "reply": "API Key 未配置，请在设置页面配置 AI 模型。",
@@ -138,42 +190,47 @@ class AIChatService:
             
             start_time = time.time()
             
+            # 根据认证类型构建请求
+            headers, request_url, request_body = self._build_request(
+                provider=provider,
+                auth_type=auth_type,
+                base_url=base_url,
+                api_key=api_key,
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                top_p=top_p
+            )
+            
             async with httpx.AsyncClient(timeout=60.0) as client:
                 response = await client.post(
-                    base_url,
-                    json={
-                        "model": model,
-                        "messages": messages,
-                        "temperature": temperature,
-                        "max_tokens": max_tokens,
-                        "top_p": top_p
-                    },
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json"
-                    }
+                    request_url,
+                    json=request_body,
+                    headers=headers
                 )
                 response.raise_for_status()
                 result = response.json()
-                
-                reply = result["choices"][0]["message"]["content"]
-                
-                elapsed_ms = (time.time() - start_time) * 1000
-                logger.info(f"AI response received: provider={provider}, status={response.status_code}, elapsed_ms={elapsed_ms:.0f}, reply_len={len(reply)}")
-                
-                # Parse corrections if any
-                corrections = self._parse_corrections(message, reply)
-                
-                # Save to history
-                self.conversation_history.extend([
-                    {"role": "user", "content": message},
-                    {"role": "assistant", "content": reply}
-                ])
-                
-                return {
-                    "reply": reply,
-                    "corrections": corrections
-                }
+            
+            # 根据响应格式解析回复
+            reply = self._parse_response(provider, result)
+            
+            elapsed_ms = (time.time() - start_time) * 1000
+            logger.info(f"AI response received: provider={provider}, status={response.status_code}, elapsed_ms={elapsed_ms:.0f}, reply_len={len(reply)}")
+            
+            # Parse corrections if any
+            corrections = self._parse_corrections(message, reply)
+            
+            # Save to history
+            self.conversation_history.extend([
+                {"role": "user", "content": message},
+                {"role": "assistant", "content": reply}
+            ])
+            
+            return {
+                "reply": reply,
+                "corrections": corrections
+            }
         except httpx.HTTPStatusError as e:
             logger.error(f"AI API HTTP error: {e.response.status_code}", exc_info=True)
             return {
@@ -186,6 +243,77 @@ class AIChatService:
                 "reply": f"发生了错误: {str(e)}，请重试。",
                 "corrections": []
             }
+    
+    def _build_request(self, provider: str, auth_type: str, base_url: str, api_key: str,
+                       model: str, messages: list, temperature: float, max_tokens: int, top_p: float) -> tuple:
+        """根据不同厂商构建请求头、URL 和请求体"""
+        headers = {"Content-Type": "application/json"}
+        request_body = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "top_p": top_p
+        }
+        
+        if auth_type == "bearer":
+            # OpenAI 兼容格式
+            headers["Authorization"] = f"Bearer {api_key}"
+            request_url = base_url
+            
+        elif auth_type == "anthropic":
+            # Anthropic Claude 格式
+            headers["x-api-key"] = api_key
+            headers["anthropic-version"] = "2023-06-01"
+            request_url = base_url
+            # 转换消息格式
+            request_body = {
+                "model": model,
+                "max_tokens": max_tokens,
+                "system": messages[0]["content"] if messages[0]["role"] == "system" else "",
+                "messages": [{"role": m["role"], "content": m["content"]} for m in messages if m["role"] != "system"]
+            }
+            
+        elif auth_type == "google":
+            # Google Gemini 格式
+            request_url = base_url.replace("{model}", model)
+            request_url += f"?key={api_key}"
+            # 转换为 Gemini 格式
+            contents = []
+            for m in messages:
+                if m["role"] == "system":
+                    continue
+                role = "user" if m["role"] == "user" else "model"
+                contents.append({"role": role, "parts": [{"text": m["content"]}]})
+            request_body = {"contents": contents}
+            if messages[0].get("role") == "system":
+                request_body["systemInstruction"] = {"parts": [{"text": messages[0]["content"]}]}
+            # Gemini 不支持 top_p
+            del request_body["top_p"]
+            
+        else:
+            # 默认 OpenAI 格式
+            headers["Authorization"] = f"Bearer {api_key}"
+            request_url = base_url
+        
+        return headers, request_url, request_body
+    
+    def _parse_response(self, provider: str, result: dict) -> str:
+        """根据不同厂商解析响应"""
+        # 标准 OpenAI 格式
+        if "choices" in result and len(result["choices"]) > 0:
+            return result["choices"][0]["message"]["content"]
+        
+        # Anthropic 格式
+        if "content" in result and len(result["content"]) > 0:
+            return result["content"][0].get("text", "")
+        
+        # Google Gemini 格式
+        if "candidates" in result and len(result["candidates"]) > 0:
+            return result["candidates"][0]["content"]["parts"][0].get("text", "")
+        
+        # 备用：返回 JSON 字符串
+        return str(result)
     
     def _get_scene_prompt(self, scene: str) -> str:
         """Get system prompt based on scene"""
@@ -259,6 +387,145 @@ class AIChatService:
     def reload_settings(self):
         """Clear settings cache to force reload"""
         self._settings_cache = None
+
+    async def stream_chat(self, message: str, scene: str = "daily"):
+        """
+        Send message to AI and yield response as streaming
+
+        Yields:
+            dict with 'chunk' (text chunk), 'done' (boolean), 'reply' (full reply when done)
+        """
+        logger.info(f"Stream chat request: scene={scene}, message_len={len(message)}")
+
+        settings = self._get_settings()
+        provider = settings.provider
+        model = settings.model
+        temperature = settings.temperature
+        max_tokens = settings.max_tokens
+        top_p = settings.top_p
+
+        api_key = self._get_api_key(settings)
+        provider_config = self._get_provider_config(provider)
+        base_url = self._get_base_url(settings)
+        auth_type = provider_config.get("auth_type", "bearer")
+
+        # Ollama 本地模型不需要 API Key
+        is_local_ollama = settings.provider == "ollama" and self._is_local_url(base_url)
+        if not api_key and not is_local_ollama:
+            if settings.provider == "ollama":
+                yield {"chunk": "Ollama 远程 API 需要配置 API Key，请前往设置页面配置。", "done": True, "reply": "Ollama 远程 API 需要配置 API Key，请前往设置页面配置。"}
+            else:
+                yield {"chunk": "API Key 未配置，请在设置页面配置 AI 模型。", "done": True, "reply": "API Key 未配置，请在设置页面配置 AI 模型。"}
+            return
+
+        system_prompt = self._get_scene_prompt(scene)
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            *self.conversation_history[-5:],
+            {"role": "user", "content": message}
+        ]
+
+        try:
+            # 根据认证类型构建请求
+            headers, request_url, request_body = self._build_request(
+                provider=provider,
+                auth_type=auth_type,
+                base_url=base_url,
+                api_key=api_key,
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                top_p=top_p
+            )
+
+            # 添加 streaming 参数
+            if provider == "anthropic":
+                request_body["stream"] = True
+            else:
+                request_body["stream"] = True
+
+            full_reply = ""
+            async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+                async with client.stream("POST", request_url, json=request_body, headers=headers) as response:
+                    response.raise_for_status()
+
+                    async for line in response.aiter_lines():
+                        if not line.strip():
+                            continue
+                        if line.startswith("data: "):
+                            data = line[6:]
+                        else:
+                            continue
+
+                        if data == "[DONE]":
+                            # 完成
+                            self.conversation_history.extend([
+                                {"role": "user", "content": message},
+                                {"role": "assistant", "content": full_reply}
+                            ])
+                            # 解析语法纠错
+                            corrections = self._parse_corrections(message, full_reply)
+                            yield {"chunk": "", "done": True, "reply": full_reply, "corrections": corrections}
+                            return
+
+                        try:
+                            chunk_data = json.loads(data)
+                        except json.JSONDecodeError:
+                            continue
+
+                        # 根据不同厂商解析流式响应
+                        chunk_content = self._parse_stream_chunk(provider, chunk_data)
+                        if chunk_content:
+                            full_reply += chunk_content
+                            yield {"chunk": chunk_content, "done": False, "reply": ""}
+
+                    # 如果没有流式响应，返回完整响应
+                    if full_reply:
+                        self.conversation_history.extend([
+                            {"role": "user", "content": message},
+                            {"role": "assistant", "content": full_reply}
+                        ])
+                        corrections = self._parse_corrections(message, full_reply)
+                        yield {"chunk": "", "done": True, "reply": full_reply, "corrections": corrections}
+                    else:
+                        # 尝试非流式请求作为后备
+                        logger.info("Stream failed, falling back to non-stream request")
+                        request_body.pop("stream", None)
+                        async with httpx.AsyncClient(timeout=60.0) as client:
+                            response = await client.post(request_url, json=request_body, headers=headers)
+                            result = response.json()
+                            full_reply = self._parse_response(provider, result)
+                            self.conversation_history.extend([
+                                {"role": "user", "content": message},
+                                {"role": "assistant", "content": full_reply}
+                            ])
+                            corrections = self._parse_corrections(message, full_reply)
+                            yield {"chunk": full_reply, "done": True, "reply": full_reply, "corrections": corrections}
+
+        except httpx.HTTPStatusError as e:
+            logger.error(f"AI API HTTP error: {e.response.status_code}", exc_info=True)
+            yield {"chunk": f"API 请求失败 ({e.response.status_code})，请检查 API Key 和网络配置。", "done": True, "reply": f"API 请求失败 ({e.response.status_code})，请检查 API Key 和网络配置。", "corrections": []}
+        except Exception as e:
+            logger.error(f"AI API error: {e}", exc_info=True)
+            yield {"chunk": f"发生了错误: {str(e)}，请重试。", "done": True, "reply": f"发生了错误: {str(e)}，请重试。", "corrections": []}
+
+    def _parse_stream_chunk(self, provider: str, chunk: dict) -> str:
+        """Parse streaming chunk from different providers"""
+        # OpenAI / DeepSeek 格式
+        if "choices" in chunk and len(chunk["choices"]) > 0:
+            delta = chunk["choices"][0].get("delta", {})
+            return delta.get("content", "")
+
+        # Anthropic 格式
+        if "type" in chunk:
+            if chunk["type"] == "content_block_delta":
+                return chunk.get("delta", {}).get("text", "")
+            elif chunk["type"] == "message_delta":
+                return chunk.get("text", "")
+
+        return ""
 
 
 # Singleton instance

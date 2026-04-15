@@ -197,7 +197,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { EditPen, VideoPlay, MagicStick, QuestionFilled } from '@element-plus/icons-vue'
-import { dictationApi, vocabApi } from '../api'
+import { dictationApi, vocabApi, listeningApi } from '../api'
 
 // 主题列表
 const themes = ref([
@@ -274,14 +274,40 @@ const getPlaceholder = (mode: string) => {
   return '请拼写单词'
 }
 
-const playAudio = () => {
+const playAudio = async () => {
   // 调用 TTS 播放
   if (currentQuestion.value?.word) {
-    // 暂时使用浏览器的 speech synthesis
-    const utterance = new SpeechSynthesisUtterance(currentQuestion.value.word)
-    utterance.lang = 'en-US'
-    speechSynthesis.speak(utterance)
+    try {
+      const res = await listeningApi.tts(currentQuestion.value.word, 1.0, 'en-US-AriaNeural')
+      // API 返回格式: { code: 0, data: { success: true, audio: "..." } }
+      if (res.data && res.data.data && res.data.data.audio) {
+        // 解码 base64 音频数据
+        const byteCharacters = atob(res.data.data.audio)
+        const byteNumbers = new Array(byteCharacters.length)
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i)
+        }
+        const byteArray = new Uint8Array(byteNumbers)
+        const blob = new Blob([byteArray], { type: 'audio/mpeg' })
+        const url = URL.createObjectURL(blob)
+        const audio = new Audio(url)
+        audio.play()
+      } else {
+        // 备用：使用浏览器 speech synthesis
+        fallbackPlayAudio(currentQuestion.value.word)
+      }
+    } catch (e) {
+      // 备用：使用浏览器 speech synthesis
+      fallbackPlayAudio(currentQuestion.value.word)
+    }
   }
+}
+
+// 备用播放方法：使用浏览器 speech synthesis
+const fallbackPlayAudio = (word: string) => {
+  const utterance = new SpeechSynthesisUtterance(word)
+  utterance.lang = 'en-US'
+  speechSynthesis.speak(utterance)
 }
 
 const startPractice = async () => {
